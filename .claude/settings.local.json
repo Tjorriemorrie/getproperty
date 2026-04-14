@@ -1,0 +1,23 @@
+{
+  "hooks": {
+    "PostToolUse": [
+      {
+        "hooks": [
+          {
+            "command": "jq -r '.tool_input.file_path // .tool_response.filePath' | { read -r f; uv run pre-commit run --files \"$f\"; } 2>/dev/null || true",
+            "type": "command"
+          }
+        ],
+        "matcher": "Write|Edit|MultiEdit"
+      }
+    ]
+  },
+  "permissions": {
+    "allow": [
+      "Bash(uv add:*)",
+      "Bash(uv run:*)",
+      "Bash(ls .venv/Scripts/uv*)",
+      "Bash(where uv:*)"
+    ]
+  }
+}
