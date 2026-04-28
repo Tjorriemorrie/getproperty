@@ -1,0 +1,30 @@
+{% load static %}
+<a href="{% url 'main:listing_detail' l.listing_id %}"
+   id="listing-{{ l.listing_id }}"
+   class="relative flex items-center gap-4 p-3 sm:p-4 pr-14 hover:bg-sand-50 transition scroll-mt-24">
+  <button type="button"
+          @click.prevent.stop="toggle('{{ l.listing_id }}')"
+          :class="has('{{ l.listing_id }}') ? 'bg-brand-600 text-white' : 'bg-sand-100 text-brand-800 hover:bg-sand-200'"
+          title="Mark as similar"
+          class="absolute top-1/2 -translate-y-1/2 right-3 inline-flex items-center justify-center h-8 w-8 rounded-full transition">
+    <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 007.07 0l2-2a5 5 0 00-7.07-7.07l-1 1"/><path d="M14 11a5 5 0 00-7.07 0l-2 2a5 5 0 007.07 7.07l1-1"/></svg>
+  </button>
+  <div class="relative h-16 w-24 min-w-24 rounded-lg overflow-hidden bg-sand-100">
+    {% with first=l.images.all|first %}
+      {% if first %}<img src="{{ first.file.url }}" alt="" loading="lazy" class="h-full w-full object-cover">{% endif %}
+    {% endwith %}
+    {% if l.removed or l.group.removed %}
+      <span class="absolute inset-x-0 top-1/2 -translate-y-1/2 mx-auto w-fit bg-red-600/90 text-white text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded">Removed</span>
+    {% endif %}
+  </div>
+  <p class="font-display text-base font-semibold text-brand-900 whitespace-nowrap tabular">{{ l.price_text|default:"POA" }}</p>
+  <div class="flex-1 min-w-0">
+    {% if l.address %}<p class="text-xs text-brand-800/75 truncate">{{ l.address }}{% if l.suburb %}, {{ l.suburb }}{% endif %}</p>{% elif l.suburb %}<p class="text-xs text-brand-800/75 truncate">{{ l.suburb }}</p>{% endif %}
+    <p class="text-xs text-brand-800/60 truncate">{% if l.listed_at %}Listed {{ l.listed_at|timesince }} ago{% if l.property_type %} · {{ l.property_type }}{% endif %}{% else %}{{ l.property_type }}{% endif %}</p>
+    {% if l.display_notes %}<p class="mt-0.5 text-xs text-brand-900 truncate">{{ l.display_notes|linebreaksbr }}</p>{% endif %}
+  </div>
+  <div class="hidden sm:flex items-center gap-4 text-xs text-brand-800/80 tabular">
+    {% if l.bedrooms %}<span>{{ l.bedrooms|floatformat:"-1" }} bd</span>{% endif %}
+    {% if l.bathrooms %}<span>{{ l.bathrooms|floatformat:"-1" }} ba</span>{% endif %}
+  </div>
+</a>

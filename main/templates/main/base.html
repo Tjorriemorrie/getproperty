@@ -1,0 +1,86 @@
+{% load static %}<!doctype html>
+<html lang="en">
+<head>
+  <meta charset="utf-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1">
+  <title>{% block title %}GetProperty{% endblock %}</title>
+
+  <link rel="preconnect" href="https://fonts.googleapis.com">
+  <link rel="preconnect" href="https://fonts.gstatic.com" crossorigin>
+  <link href="https://fonts.googleapis.com/css2?family=Fraunces:opsz,wght@9..144,400;9..144,500;9..144,600;9..144,700&family=Inter:wght@400;500;600;700&display=swap" rel="stylesheet">
+
+  <script src="https://cdn.tailwindcss.com?plugins=forms,typography"></script>
+  <script>
+    tailwind.config = {
+      theme: {
+        extend: {
+          fontFamily: {
+            sans: ['Inter', 'system-ui', 'sans-serif'],
+            display: ['Fraunces', 'Georgia', 'serif'],
+          },
+          colors: {
+            brand: {
+              50:  '#f3f7f4',
+              100: '#e3ece4',
+              200: '#c5d8c8',
+              300: '#9abba0',
+              400: '#6c9a75',
+              500: '#4b7e56',
+              600: '#386342',
+              700: '#2d4f36',
+              800: '#263f2d',
+              900: '#1f3325',
+            },
+            sand: {
+              50:  '#faf8f4',
+              100: '#f3efe6',
+              200: '#e7dfcc',
+              300: '#d4c6a5',
+              400: '#bca77b',
+            },
+          },
+          boxShadow: {
+            card: '0 1px 2px rgba(16,24,40,.04), 0 8px 24px -12px rgba(16,24,40,.12)',
+          },
+        },
+      },
+    }
+  </script>
+
+  <link rel="stylesheet" href="https://cdn.jsdelivr.net/npm/swiper@11/swiper-bundle.min.css">
+
+  <style>
+    html { font-family: 'Inter', system-ui, sans-serif; }
+    .font-display { font-family: 'Fraunces', Georgia, serif; font-optical-sizing: auto; }
+    .tabular { font-variant-numeric: tabular-nums; }
+  </style>
+  {% block head %}{% endblock %}
+</head>
+<body class="bg-sand-50 text-brand-900 antialiased">
+
+<header class="border-b border-sand-200 bg-white/80 backdrop-blur sticky top-0 z-30">
+  <div class="w-full px-4 sm:px-6 lg:px-10 h-16 flex items-center justify-between">
+    <a href="{% url 'main:listing_list' %}" class="flex items-center gap-2">
+      <span class="inline-flex h-8 w-8 items-center justify-center rounded-md bg-brand-600 text-white font-display text-lg font-semibold">g</span>
+      <span class="font-display text-xl font-semibold tracking-tight">getproperty</span>
+    </a>
+    <nav class="hidden sm:flex items-center gap-6 text-sm text-brand-800/80">
+      <a href="{% url 'main:listing_list' %}" class="hover:text-brand-900">Listings</a>
+    </nav>
+  </div>
+</header>
+
+<main>{% block content %}{% endblock %}</main>
+
+<footer class="mt-24 border-t border-sand-200 bg-white">
+  <div class="w-full px-4 sm:px-6 lg:px-10 py-8 text-sm text-brand-800/60 flex justify-between">
+    <span>© getproperty</span>
+    <span class="font-display italic">Find your place.</span>
+  </div>
+</footer>
+
+<script src="https://cdn.jsdelivr.net/npm/swiper@11/swiper-bundle.min.js" defer></script>
+<script src="https://cdn.jsdelivr.net/npm/alpinejs@3.x.x/dist/cdn.min.js" defer></script>
+{% block scripts %}{% endblock %}
+</body>
+</html>

@@ -3,10 +3,15 @@ name = "getproperty"
 version = "0.1.0"
 description = "Property scraper"
 readme = "README.md"
-requires-python = "==3.13"
+requires-python = ">=3.13"
 dependencies = [
+    "beautifulsoup4",
+    "botasaurus>=4.0.97",
+    "colorlog",
     "django",
     "django-environ",
+    "imagehash",
+    "pillow",
 ]
 
 [dependency-groups]

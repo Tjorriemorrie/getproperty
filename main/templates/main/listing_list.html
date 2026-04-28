@@ -1,0 +1,237 @@
+{% extends 'main/base.html' %}
+
+{% block title %}Listings · getproperty{% endblock %}
+
+{% block content %}
+<div x-data="{
+       layout: (localStorage.getItem('layout') || 'grid'),
+       set(l){ this.layout=l; localStorage.setItem('layout', l); },
+       selected: JSON.parse(localStorage.getItem('similar_ids') || '[]'),
+       toggle(id){
+         const i = this.selected.indexOf(id);
+         if (i >= 0) this.selected.splice(i, 1); else this.selected.push(id);
+         localStorage.setItem('similar_ids', JSON.stringify(this.selected));
+       },
+       has(id){ return this.selected.includes(id); },
+       clear(){ this.selected = []; localStorage.setItem('similar_ids', '[]'); }
+     }"
+     class="w-full px-4 sm:px-6 lg:px-10 py-6">
+
+  <div class="flex flex-col lg:flex-row gap-8">
+
+    <!-- Sidebar -->
+    <aside class="lg:w-80 lg:min-w-80 lg:max-w-80 shrink-0">
+      <form method="get" id="filters"
+            class="lg:sticky lg:top-20 lg:max-h-[calc(100vh-6rem)] lg:overflow-y-auto space-y-2.5 pr-1 -mr-1">
+
+        <div class="rounded-xl bg-white border border-sand-200 shadow-card px-3 py-2.5">
+          <div class="flex items-center justify-between">
+            <h2 class="font-display text-sm font-semibold">Filters</h2>
+            {% if active_count %}
+              <a href="{% url 'main:listing_list' %}?reset=1" class="text-[11px] text-brand-700 hover:underline">Clear ({{ active_count }})</a>
+            {% endif %}
+          </div>
+
+          <input type="text" name="q" value="{{ filters.q }}" placeholder="Search title, address…"
+                 class="mt-2 w-full rounded border-sand-200 focus:border-brand-500 focus:ring-brand-500 text-sm h-8 px-2 py-1">
+
+          <select name="sort" onchange="document.getElementById('filters').submit()"
+                  class="mt-1.5 w-full rounded border-sand-200 focus:border-brand-500 focus:ring-brand-500 text-sm h-8 py-1">
+            {% for key, label in sort_options %}
+              <option value="{{ key }}" {% if filters.sort == key %}selected{% endif %}>{{ label }}</option>
+            {% endfor %}
+          </select>
+        </div>
+
+        {% include 'main/_facet_checkbox.html' with title='Property type' name='property_type' items=type_facet %}
+
+        <!-- Levies binary -->
+        <div class="rounded-xl bg-white border border-sand-200 shadow-card px-3 py-2.5">
+          <h3 class="font-display text-xs font-semibold uppercase tracking-wide text-brand-800/70 mb-1.5">Levies</h3>
+          <div class="text-sm">
+            <label class="flex items-center justify-between py-0.5 px-1.5 -mx-1.5 rounded hover:bg-sand-50 cursor-pointer">
+              <span class="flex items-center gap-1.5">
+                <input type="radio" name="has_levies" value="" {% if filters.has_levies == '' %}checked{% endif %}
+                       onchange="document.getElementById('filters').submit()"
+                       class="text-brand-600 border-sand-300 focus:ring-brand-500 h-3.5 w-3.5">
+                <span>Any</span>
+              </span>
+              <span class="text-[11px] tabular text-brand-800/50">{{ levies_counts.any }}</span>
+            </label>
+            <label class="flex items-center justify-between py-0.5 px-1.5 -mx-1.5 rounded hover:bg-sand-50 cursor-pointer">
+              <span class="flex items-center gap-1.5">
+                <input type="radio" name="has_levies" value="yes" {% if filters.has_levies == 'yes' %}checked{% endif %}
+                       onchange="document.getElementById('filters').submit()"
+                       class="text-brand-600 border-sand-300 focus:ring-brand-500 h-3.5 w-3.5">
+                <span>With levies</span>
+              </span>
+              <span class="text-[11px] tabular text-brand-800/50">{{ levies_counts.yes }}</span>
+            </label>
+            <label class="flex items-center justify-between py-0.5 px-1.5 -mx-1.5 rounded hover:bg-sand-50 cursor-pointer">
+              <span class="flex items-center gap-1.5">
+                <input type="radio" name="has_levies" value="no" {% if filters.has_levies == 'no' %}checked{% endif %}
+                       onchange="document.getElementById('filters').submit()"
+                       class="text-brand-600 border-sand-300 focus:ring-brand-500 h-3.5 w-3.5">
+                <span>No levies</span>
+              </span>
+              <span class="text-[11px] tabular text-brand-800/50">{{ levies_counts.no }}</span>
+            </label>
+          </div>
+        </div>
+
+        <input type="hidden" name="price_min" value="{{ filters.price_min }}">
+        <input type="hidden" name="price_max" value="{{ filters.price_max }}">
+        <input type="hidden" name="size_min" value="{{ filters.size_min }}">
+        <input type="hidden" name="size_max" value="{{ filters.size_max }}">
+
+        <!-- Price percentiles -->
+        {% if price_facet %}
+        <div class="rounded-xl bg-white border border-sand-200 shadow-card px-3 py-2.5">
+          <div class="flex items-center justify-between mb-1.5">
+            <h3 class="font-display text-xs font-semibold uppercase tracking-wide text-brand-800/70">Price (R)</h3>
+            {% if price_clear_href %}
+              <a href="{{ price_clear_href }}" class="text-[11px] text-brand-700 hover:underline">Clear</a>
+            {% endif %}
+          </div>
+          <div class="text-sm">
+            {% for row in price_facet %}
+              <div class="flex items-center justify-between gap-1 py-0.5 px-1.5 -mx-1.5 rounded hover:bg-sand-50">
+                <span class="truncate min-w-0 tabular">R {{ row.display }}</span>
+                <div class="inline-flex shrink-0 rounded border border-sand-200 overflow-hidden">
+                  <a href="{{ row.lte_href }}" title="This and below ({{ row.lte_count }})"
+                     class="px-1.5 text-[11px] leading-none h-5 inline-flex items-center border-r border-sand-200 {% if row.lte_selected %}bg-brand-600 text-white{% else %}text-brand-700 hover:bg-brand-50{% endif %}">≤</a>
+                  <a href="{{ row.eq_href }}" title="Around this price ({{ row.eq_count }})"
+                     class="px-1.5 text-[11px] leading-none h-5 inline-flex items-center border-r border-sand-200 {% if row.eq_selected %}bg-brand-600 text-white{% else %}text-brand-700 hover:bg-brand-50{% endif %}">=</a>
+                  <a href="{{ row.gte_href }}" title="This and above ({{ row.gte_count }})"
+                     class="px-1.5 text-[11px] leading-none h-5 inline-flex items-center {% if row.gte_selected %}bg-brand-600 text-white{% else %}text-brand-700 hover:bg-brand-50{% endif %}">≥</a>
+                </div>
+              </div>
+            {% endfor %}
+          </div>
+        </div>
+        {% endif %}
+
+        <!-- Floor size percentiles -->
+        {% if size_facet %}
+        <div class="rounded-xl bg-white border border-sand-200 shadow-card px-3 py-2.5">
+          <div class="flex items-center justify-between mb-1.5">
+            <h3 class="font-display text-xs font-semibold uppercase tracking-wide text-brand-800/70">Floor size (m²)</h3>
+            {% if size_clear_href %}
+              <a href="{{ size_clear_href }}" class="text-[11px] text-brand-700 hover:underline">Clear</a>
+            {% endif %}
+          </div>
+          <div class="text-sm">
+            {% for row in size_facet %}
+              <div class="flex items-center justify-between gap-1 py-0.5 px-1.5 -mx-1.5 rounded hover:bg-sand-50">
+                <span class="truncate min-w-0 tabular">{{ row.display }} m²</span>
+                <div class="inline-flex shrink-0 rounded border border-sand-200 overflow-hidden">
+                  <a href="{{ row.lte_href }}" title="This and below ({{ row.lte_count }})"
+                     class="px-1.5 text-[11px] leading-none h-5 inline-flex items-center border-r border-sand-200 {% if row.lte_selected %}bg-brand-600 text-white{% else %}text-brand-700 hover:bg-brand-50{% endif %}">≤</a>
+                  <a href="{{ row.eq_href }}" title="Around this size ({{ row.eq_count }})"
+                     class="px-1.5 text-[11px] leading-none h-5 inline-flex items-center border-r border-sand-200 {% if row.eq_selected %}bg-brand-600 text-white{% else %}text-brand-700 hover:bg-brand-50{% endif %}">=</a>
+                  <a href="{{ row.gte_href }}" title="This and above ({{ row.gte_count }})"
+                     class="px-1.5 text-[11px] leading-none h-5 inline-flex items-center {% if row.gte_selected %}bg-brand-600 text-white{% else %}text-brand-700 hover:bg-brand-50{% endif %}">≥</a>
+                </div>
+              </div>
+            {% endfor %}
+          </div>
+        </div>
+        {% endif %}
+
+        {% include 'main/_facet_metric.html' with title='Bedrooms' name='beds' items=bed_facet suffix=' bd' %}
+        {% include 'main/_facet_metric.html' with title='Bathrooms' name='baths' items=bath_facet suffix=' ba' %}
+        {% include 'main/_facet_metric.html' with title='Garages' name='garages' items=garage_facet suffix=' gr' %}
+
+      </form>
+    </aside>
+
+    <!-- Results -->
+    <div class="flex-1 min-w-0">
+      <div class="flex items-center justify-between">
+        <p class="text-sm text-brand-800/70"><span class="font-semibold text-brand-900 tabular">{{ total }}</span> result{{ total|pluralize }}</p>
+        <div class="inline-flex rounded-lg border border-sand-200 bg-white p-1">
+          <button type="button" @click="set('grid')" :class="layout==='grid' ? 'bg-brand-600 text-white' : 'text-brand-800/70 hover:text-brand-900'"
+                  class="px-3 h-8 text-sm rounded-md inline-flex items-center gap-1.5 transition">
+            <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><rect x="3" y="3" width="7" height="7" rx="1"/><rect x="14" y="3" width="7" height="7" rx="1"/><rect x="3" y="14" width="7" height="7" rx="1"/><rect x="14" y="14" width="7" height="7" rx="1"/></svg>
+            Cards
+          </button>
+          <button type="button" @click="set('list')" :class="layout==='list' ? 'bg-brand-600 text-white' : 'text-brand-800/70 hover:text-brand-900'"
+                  class="px-3 h-8 text-sm rounded-md inline-flex items-center gap-1.5 transition">
+            <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="6" x2="21" y2="6"/><line x1="3" y1="12" x2="21" y2="12"/><line x1="3" y1="18" x2="21" y2="18"/></svg>
+            List
+          </button>
+          <button type="button" @click="set('compact')" :class="layout==='compact' ? 'bg-brand-600 text-white' : 'text-brand-800/70 hover:text-brand-900'"
+                  class="px-3 h-8 text-sm rounded-md inline-flex items-center gap-1.5 transition">
+            <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><line x1="3" y1="5" x2="21" y2="5"/><line x1="3" y1="9" x2="21" y2="9"/><line x1="3" y1="13" x2="21" y2="13"/><line x1="3" y1="17" x2="21" y2="17"/><line x1="3" y1="21" x2="21" y2="21"/></svg>
+            Compact
+          </button>
+        </div>
+      </div>
+
+      {% if not listings %}
+        <div class="mt-6 rounded-2xl border border-dashed border-sand-300 bg-white p-12 text-center">
+          <p class="font-display text-2xl text-brand-900">No listings match.</p>
+          <p class="mt-2 text-brand-800/70">Try widening your filters — or clear them entirely.</p>
+          <a href="{% url 'main:listing_list' %}?reset=1" class="mt-4 inline-flex items-center rounded-lg bg-brand-600 text-white px-4 h-10">Clear filters</a>
+        </div>
+      {% else %}
+        <div class="mt-5">
+          <div x-show="layout==='grid'" class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-6">
+            {% for l in listings %}{% include 'main/_card_grid.html' with l=l %}{% endfor %}
+          </div>
+
+          <div x-show="layout==='list'" x-cloak class="flex flex-col gap-4">
+            {% for l in listings %}{% include 'main/_card_list.html' with l=l %}{% endfor %}
+          </div>
+
+          <div x-show="layout==='compact'" x-cloak class="overflow-hidden rounded-xl border border-sand-200 bg-white divide-y divide-sand-200">
+            {% for l in listings %}{% include 'main/_card_compact.html' with l=l %}{% endfor %}
+          </div>
+        </div>
+      {% endif %}
+    </div>
+
+  </div>
+
+  <form method="post" action="{% url 'main:mark_similar' %}"
+        @submit="localStorage.setItem('similar_ids', '[]')"
+        x-show="selected.length >= 2" x-cloak
+        class="fixed bottom-6 right-6 z-40 flex items-center gap-2 rounded-full bg-brand-600 text-white shadow-lg pl-5 pr-2 py-2">
+    {% csrf_token %}
+    <input type="hidden" name="next" :value="window.location.pathname + window.location.search">
+    <template x-for="id in selected" :key="id">
+      <input type="hidden" name="listing_id" :value="id">
+    </template>
+    <span class="text-sm font-medium">
+      Mark <span x-text="selected.length" class="tabular"></span> as similar
+    </span>
+    <button type="submit"
+            class="inline-flex items-center justify-center h-9 px-4 rounded-full bg-white text-brand-700 text-sm font-semibold hover:bg-sand-50 transition">
+      Link
+    </button>
+    <button type="button" @click="clear()"
+            title="Clear selection"
+            class="inline-flex items-center justify-center h-9 w-9 rounded-full bg-white/10 hover:bg-white/20 transition">
+      <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M6 6l12 12M18 6L6 18"/></svg>
+    </button>
+  </form>
+</div>
+
+<style>[x-cloak]{display:none!important}</style>
+<script>
+  function facetRange(btn, op) {
+    const block = btn.closest('[data-facet]');
+    if (!block) return;
+    const row = btn.closest('[data-value]');
+    const pivot = parseFloat(row.dataset.value);
+    const rows = block.querySelectorAll('[data-value]');
+    rows.forEach(r => {
+      const v = parseFloat(r.dataset.value);
+      const cb = r.querySelector('input[type=checkbox]');
+      if (!cb) return;
+      cb.checked = op === 'lte' ? (v <= pivot) : (v >= pivot);
+    });
+    document.getElementById('filters').submit();
+  }
+</script>
+{% endblock %}

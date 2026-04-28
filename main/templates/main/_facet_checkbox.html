@@ -1,0 +1,18 @@
+{% if items %}
+<div class="rounded-xl bg-white border border-sand-200 shadow-card px-3 py-2.5">
+  <h3 class="font-display text-xs font-semibold uppercase tracking-wide text-brand-800/70 mb-1.5">{{ title }}</h3>
+  <div class="text-sm max-h-56 overflow-y-auto overflow-x-hidden">
+    {% for value, label, count, selected in items %}
+      <label class="flex items-center justify-between gap-2 py-0.5 px-1.5 -mx-1.5 rounded hover:bg-sand-50 cursor-pointer">
+        <span class="flex items-center gap-1.5 min-w-0 flex-1">
+          <input type="checkbox" name="{{ name }}" value="{{ value }}" {% if selected %}checked{% endif %}
+                 onchange="document.getElementById('filters').submit()"
+                 class="rounded text-brand-600 border-sand-300 focus:ring-brand-500 shrink-0 h-3.5 w-3.5">
+          <span class="truncate min-w-0">{{ label }}{{ suffix|default:'' }}</span>
+        </span>
+        <span class="text-[11px] tabular text-brand-800/50 shrink-0">{{ count }}</span>
+      </label>
+    {% endfor %}
+  </div>
+</div>
+{% endif %}
