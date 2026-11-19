@@ -1,5 +1,4 @@
-"""
-WSGI config for getproperty project.
+"""WSGI config for getproperty project.
 
 It exposes the WSGI callable as a module-level variable named ``application``.
 

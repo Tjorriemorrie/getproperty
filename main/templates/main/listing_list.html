@@ -79,6 +79,8 @@
           </div>
         </div>
 
+        {% include 'main/_facet_checkbox.html' with title='Complex' name='complex' items=complex_facet %}
+
         <input type="hidden" name="price_min" value="{{ filters.price_min }}">
         <input type="hidden" name="price_max" value="{{ filters.price_max }}">
         <input type="hidden" name="size_min" value="{{ filters.size_min }}">
@@ -110,6 +112,40 @@
           </div>
         </div>
         {% endif %}
+
+        <!-- Liked binary -->
+        <div class="rounded-xl bg-white border border-sand-200 shadow-card px-3 py-2.5">
+          <h3 class="font-display text-xs font-semibold uppercase tracking-wide text-brand-800/70 mb-1.5">Liked</h3>
+          <div class="text-sm">
+            <label class="flex items-center justify-between py-0.5 px-1.5 -mx-1.5 rounded hover:bg-sand-50 cursor-pointer">
+              <span class="flex items-center gap-1.5">
+                <input type="radio" name="is_liked" value="" {% if filters.is_liked == '' %}checked{% endif %}
+                       onchange="document.getElementById('filters').submit()"
+                       class="text-brand-600 border-sand-300 focus:ring-brand-500 h-3.5 w-3.5">
+                <span>Any</span>
+              </span>
+              <span class="text-[11px] tabular text-brand-800/50">{{ liked_counts.any }}</span>
+            </label>
+            <label class="flex items-center justify-between py-0.5 px-1.5 -mx-1.5 rounded hover:bg-sand-50 cursor-pointer">
+              <span class="flex items-center gap-1.5">
+                <input type="radio" name="is_liked" value="yes" {% if filters.is_liked == 'yes' %}checked{% endif %}
+                       onchange="document.getElementById('filters').submit()"
+                       class="text-brand-600 border-sand-300 focus:ring-brand-500 h-3.5 w-3.5">
+                <span>Liked</span>
+              </span>
+              <span class="text-[11px] tabular text-brand-800/50">{{ liked_counts.yes }}</span>
+            </label>
+            <label class="flex items-center justify-between py-0.5 px-1.5 -mx-1.5 rounded hover:bg-sand-50 cursor-pointer">
+              <span class="flex items-center gap-1.5">
+                <input type="radio" name="is_liked" value="no" {% if filters.is_liked == 'no' %}checked{% endif %}
+                       onchange="document.getElementById('filters').submit()"
+                       class="text-brand-600 border-sand-300 focus:ring-brand-500 h-3.5 w-3.5">
+                <span>Not liked</span>
+              </span>
+              <span class="text-[11px] tabular text-brand-800/50">{{ liked_counts.no }}</span>
+            </label>
+          </div>
+        </div>
 
         <!-- Floor size percentiles -->
         {% if size_facet %}
@@ -175,19 +211,18 @@
           <a href="{% url 'main:listing_list' %}?reset=1" class="mt-4 inline-flex items-center rounded-lg bg-brand-600 text-white px-4 h-10">Clear filters</a>
         </div>
       {% else %}
-        <div class="mt-5">
-          <div x-show="layout==='grid'" class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-6">
-            {% for l in listings %}{% include 'main/_card_grid.html' with l=l %}{% endfor %}
+        {% if active_listings %}
+          {% include 'main/_listing_section.html' with section=active_listings %}
+        {% endif %}
+        {% if removed_listings %}
+          <div class="mt-12 flex items-center gap-3">
+            <h2 class="font-display text-xl font-semibold text-brand-900">Removed</h2>
+            <span class="text-sm text-brand-800/60 tabular">{{ removed_listings|length }}</span>
+            <div class="flex-1 border-t border-sand-200"></div>
           </div>
-
-          <div x-show="layout==='list'" x-cloak class="flex flex-col gap-4">
-            {% for l in listings %}{% include 'main/_card_list.html' with l=l %}{% endfor %}
-          </div>
-
-          <div x-show="layout==='compact'" x-cloak class="overflow-hidden rounded-xl border border-sand-200 bg-white divide-y divide-sand-200">
-            {% for l in listings %}{% include 'main/_card_compact.html' with l=l %}{% endfor %}
-          </div>
-        </div>
+          <p class="mt-1 text-xs text-brand-800/60">No longer available on the source site — still matched by your filters.</p>
+          {% include 'main/_listing_section.html' with section=removed_listings %}
+        {% endif %}
       {% endif %}
     </div>
 

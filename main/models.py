@@ -1,6 +1,9 @@
+import logging
 import re
 
 from django.db import models
+
+logger = logging.getLogger(__name__)
 
 
 def parse_size_m2(value):
@@ -12,19 +15,43 @@ def parse_size_m2(value):
 
 
 class ListingGroup(models.Model):
-    """Groups duplicate listings from different agents. The primary listing's details
-    are used to represent the group on list pages.
+    """Groups duplicate listings from different agents.
+
+    The primary listing's details are used to represent the group on list pages.
     """
 
     primary = models.ForeignKey(
         'Listing', on_delete=models.SET_NULL, null=True, blank=True, related_name='+'
     )
+    main_image = models.ForeignKey(
+        'ListingImage', on_delete=models.SET_NULL, null=True, blank=True, related_name='+'
+    )
     notes = models.TextField(blank=True, default='')
-    removed = models.BooleanField(default=False, db_index=True)
+    is_liked = models.BooleanField(default=True, db_index=True)
+    removed_at = models.DateTimeField(null=True, blank=True, db_index=True)
     created_at = models.DateTimeField(auto_now_add=True)
 
     def __str__(self):
         return f'Group {self.pk} ({self.listings.count()} listings)'
+
+    def refresh_removed_at(self):
+        """Stamp ``removed_at`` with the latest member time once every listing is removed.
+
+        Cleared again as soon as any member is active.
+        """
+        listings = list(self.listings.all())
+        if not listings:
+            logger.warning(f'📦 Group has no listings, removed_at left as-is: group_id={self.pk}')
+            return
+        removed_times = [li.removed_at for li in listings]
+        new_value = max(removed_times) if all(removed_times) else None
+        if self.removed_at != new_value:
+            logger.info(
+                f'📦 Group removed_at changed: group_id={self.pk}, '
+                f'old={self.removed_at}, new={new_value}, members={len(listings)}'
+            )
+            self.removed_at = new_value
+            self.save(update_fields=['removed_at'])
 
 
 class Listing(models.Model):
@@ -54,6 +81,9 @@ class Listing(models.Model):
 
     rates_and_taxes = models.IntegerField(null=True, blank=True)
     levies = models.IntegerField(null=True, blank=True)
+    # Hand-entered sectional-title complex name. Kept identical across every
+    # listing in a ListingGroup (see views.set_complex_name / mark_similar).
+    complex_name = models.CharField(max_length=200, blank=True, default='', db_index=True)
 
     headline = models.CharField(max_length=500, blank=True)
     description = models.TextField(blank=True)
@@ -65,6 +95,11 @@ class Listing(models.Model):
     agency = models.CharField(max_length=200, blank=True)
 
     notes = models.TextField(blank=True, default='')
+    is_liked = models.BooleanField(default=True, db_index=True)
+
+    main_image = models.ForeignKey(
+        'ListingImage', on_delete=models.SET_NULL, null=True, blank=True, related_name='+'
+    )
 
     group = models.ForeignKey(
         ListingGroup, on_delete=models.SET_NULL, null=True, blank=True, related_name='listings'
@@ -74,12 +109,13 @@ class Listing(models.Model):
     first_seen_at = models.DateTimeField(auto_now_add=True)
     last_scraped_at = models.DateTimeField(auto_now=True)
     rechecked_at = models.DateTimeField(null=True, blank=True, db_index=True)
-    removed = models.BooleanField(default=False, db_index=True)
+    removed_at = models.DateTimeField(null=True, blank=True, db_index=True)
 
     class Meta:
         ordering = ['-listed_at']
 
     def save(self, *args, **kwargs):
+        """Derive the numeric m² columns from the scraped size strings, then save."""
         self.floor_size_m2 = parse_size_m2(self.floor_size)
         self.erf_size_m2 = parse_size_m2(self.erf_size)
         super().save(*args, **kwargs)

@@ -5,17 +5,20 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     initial = True
 
-    dependencies = [
-    ]
+    dependencies = []
 
     operations = [
         migrations.CreateModel(
             name='Listing',
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                (
+                    'id',
+                    models.BigAutoField(
+                        auto_created=True, primary_key=True, serialize=False, verbose_name='ID'
+                    ),
+                ),
                 ('listing_id', models.CharField(db_index=True, max_length=50, unique=True)),
                 ('url', models.URLField(max_length=500)),
                 ('title', models.CharField(blank=True, max_length=500)),
@@ -46,12 +49,24 @@ class Migration(migrations.Migration):
         migrations.CreateModel(
             name='ListingImage',
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                (
+                    'id',
+                    models.BigAutoField(
+                        auto_created=True, primary_key=True, serialize=False, verbose_name='ID'
+                    ),
+                ),
                 ('source_url', models.URLField(max_length=1000)),
                 ('file', models.FileField(upload_to='listings/%Y/%m/')),
                 ('position', models.PositiveIntegerField(default=0)),
                 ('downloaded_at', models.DateTimeField(auto_now_add=True)),
-                ('listing', models.ForeignKey(on_delete=django.db.models.deletion.CASCADE, related_name='images', to='main.listing')),
+                (
+                    'listing',
+                    models.ForeignKey(
+                        on_delete=django.db.models.deletion.CASCADE,
+                        related_name='images',
+                        to='main.listing',
+                    ),
+                ),
             ],
             options={
                 'ordering': ['position'],

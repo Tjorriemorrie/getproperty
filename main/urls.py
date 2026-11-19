@@ -11,6 +11,14 @@ urlpatterns = [
     path('listing/<str:listing_id>/unlink/', views.unlink_similar, name='unlink_similar'),
     path('listing/<str:listing_id>/set-primary/', views.set_primary, name='set_primary'),
     path('listing/<str:listing_id>/set-type/', views.set_property_type, name='set_property_type'),
-    path('listing/<str:listing_id>/set-levy-placeholder/', views.set_levy_placeholder, name='set_levy_placeholder'),
+    path(
+        'listing/<str:listing_id>/set-levy-placeholder/',
+        views.set_levy_placeholder,
+        name='set_levy_placeholder',
+    ),
+    path('listing/<str:listing_id>/set-complex/', views.set_complex_name, name='set_complex_name'),
     path('listing/<str:listing_id>/set-notes/', views.set_notes, name='set_notes'),
+    path('listing/<str:listing_id>/set-liked/', views.set_liked, name='set_liked'),
+    path('listing/<str:listing_id>/set-main-image/', views.set_main_image, name='set_main_image'),
+    path('listing/<str:listing_id>/delete/', views.delete_listing, name='delete_listing'),
 ]

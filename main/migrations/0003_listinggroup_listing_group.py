@@ -5,7 +5,6 @@ from django.db import migrations, models
 
 
 class Migration(migrations.Migration):
-
     dependencies = [
         ('main', '0002_listing_headline_listing_latitude_listing_levies_and_more'),
     ]
@@ -14,14 +13,34 @@ class Migration(migrations.Migration):
         migrations.CreateModel(
             name='ListingGroup',
             fields=[
-                ('id', models.BigAutoField(auto_created=True, primary_key=True, serialize=False, verbose_name='ID')),
+                (
+                    'id',
+                    models.BigAutoField(
+                        auto_created=True, primary_key=True, serialize=False, verbose_name='ID'
+                    ),
+                ),
                 ('created_at', models.DateTimeField(auto_now_add=True)),
-                ('primary', models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='+', to='main.listing')),
+                (
+                    'primary',
+                    models.ForeignKey(
+                        blank=True,
+                        null=True,
+                        on_delete=django.db.models.deletion.SET_NULL,
+                        related_name='+',
+                        to='main.listing',
+                    ),
+                ),
             ],
         ),
         migrations.AddField(
             model_name='listing',
             name='group',
-            field=models.ForeignKey(blank=True, null=True, on_delete=django.db.models.deletion.SET_NULL, related_name='listings', to='main.listinggroup'),
+            field=models.ForeignKey(
+                blank=True,
+                null=True,
+                on_delete=django.db.models.deletion.SET_NULL,
+                related_name='listings',
+                to='main.listinggroup',
+            ),
         ),
     ]

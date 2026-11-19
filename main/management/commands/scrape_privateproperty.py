@@ -5,7 +5,7 @@ import logging
 from django.core.management.base import BaseCommand
 
 from main import constants
-from main.privateproperty import scrape
+from main.privateproperty import recheck_oldest, scrape
 
 logger = logging.getLogger(__name__)
 
@@ -16,6 +16,7 @@ class Command(BaseCommand):
     help = 'Scrape privateproperty.co.za listings from all PP_* URLs in main.constants.'
 
     def add_arguments(self, parser):
+        """Register --max-pages and --all."""
         parser.add_argument(
             '--max-pages', type=int, default=None, help='Maximum list pages to traverse per URL.'
         )
@@ -27,10 +28,9 @@ class Command(BaseCommand):
         )
 
     def handle(self, *args, **options):
+        """Scrape every PP_* URL, then recheck the oldest listings unless --all."""
         total_new = 0
         total_images = 0
-        total_rechecked = 0
-        total_removed = 0
         for url in URLS:
             self.stdout.write(f'Scraping {url}')
             result = scrape(
@@ -40,15 +40,17 @@ class Command(BaseCommand):
             )
             total_new += result['new_listings']
             total_images += result['images']
-            total_rechecked += result.get('rechecked', 0)
-            total_removed += result.get('removed', 0)
-            extras = ''
-            if 'rechecked' in result:
-                extras = f', rechecked: {result["rechecked"]}, removed: {result["removed"]}'
             self.stdout.write(
-                f'  -> new listings: {result["new_listings"]}, images: {result["images"]}{extras}'
+                f'  -> new listings: {result["new_listings"]}, images: {result["images"]}'
             )
+
         summary = f'Done. Total new listings: {total_new}, images: {total_images}'
         if not options['full']:
-            summary += f', rechecked: {total_rechecked}, removed: {total_removed}'
+            self.stdout.write('Rechecking oldest active listings across all sources')
+            recheck = recheck_oldest()
+            total_images += recheck['images']
+            summary = (
+                f'Done. Total new listings: {total_new}, images: {total_images}, '
+                f'rechecked: {recheck["rechecked"]}, removed: {recheck["removed"]}'
+            )
         self.stdout.write(self.style.SUCCESS(summary))

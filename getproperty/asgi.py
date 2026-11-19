@@ -1,5 +1,4 @@
-"""
-ASGI config for getproperty project.
+"""ASGI config for getproperty project.
 
 It exposes the ASGI callable as a module-level variable named ``application``.
 

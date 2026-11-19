@@ -3,19 +3,20 @@
    id="listing-{{ l.listing_id }}"
    class="group relative flex flex-col overflow-hidden rounded-2xl bg-white border border-sand-200 shadow-card hover:shadow-lg transition scroll-mt-24">
   <div class="relative aspect-[4/3] overflow-hidden bg-sand-100">
-    {% with first=l.images.all|first %}
-      {% if first %}
-        <img src="{{ first.file.url }}" alt="{{ l.title }}" loading="lazy"
-             class="h-full w-full object-cover group-hover:scale-[1.03] transition duration-500">
-      {% else %}
-        <div class="h-full w-full flex items-center justify-center text-sand-300 font-display text-2xl">no image</div>
-      {% endif %}
-    {% endwith %}
+    {% if l.display_image %}
+      <img src="{{ l.display_image.file.url }}" alt="{{ l.title }}" loading="lazy"
+           class="h-full w-full object-cover group-hover:scale-[1.03] transition duration-500">
+    {% else %}
+      <div class="h-full w-full flex items-center justify-center text-sand-300 font-display text-2xl">no image</div>
+    {% endif %}
     {% if l.property_type %}
       <span class="absolute top-3 left-3 bg-white/90 backdrop-blur text-xs font-medium text-brand-800 px-2.5 py-1 rounded-full">{{ l.property_type }}</span>
     {% endif %}
-    {% if l.removed or l.group.removed %}
-      <span class="absolute inset-x-0 top-1/2 -translate-y-1/2 mx-auto w-fit bg-red-600/90 text-white text-xs font-semibold uppercase tracking-widest px-3 py-1 rounded-full shadow-lg">Removed</span>
+    {% if l.display_removed_at %}
+      <div class="absolute inset-x-0 top-1/2 -translate-y-1/2 bg-red-600 text-white text-center py-2 shadow-lg">
+        <div class="text-sm font-bold uppercase tracking-[0.3em]">Removed</div>
+        {% if l.display_removed_start %}<div class="mt-0.5 text-[11px] font-medium uppercase tracking-wider opacity-90">Active for {{ l.display_removed_start|timesince:l.display_removed_end }}</div>{% endif %}
+      </div>
     {% endif %}
     <button type="button"
             @click.prevent.stop="toggle('{{ l.listing_id }}')"
@@ -38,9 +39,15 @@
     {% endif %}
   </div>
   <div class="p-5 flex-1 flex flex-col">
-    <p class="font-display text-2xl font-semibold text-brand-900 tabular">{{ l.price_text|default:"POA" }}</p>
-    {% if l.address %}<p class="mt-1 text-xs text-brand-800/70 line-clamp-1">{{ l.address }}{% if l.suburb %}, {{ l.suburb }}{% endif %}</p>{% elif l.suburb %}<p class="mt-1 text-xs text-brand-800/70 line-clamp-1">{{ l.suburb }}</p>{% endif %}
+    <div class="flex items-center justify-between gap-2">
+      <p class="font-display text-2xl font-semibold text-brand-900 tabular">{{ l.price_text|default:"POA" }}</p>
+      {% if not l.display_is_liked %}
+        <svg class="h-6 w-6 text-red-600 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-label="Disliked"><circle cx="12" cy="12" r="10"/><path d="M8 16s1.5-2 4-2 4 2 4 2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>
+      {% endif %}
+    </div>
+    {% if l.complex_name or l.address or l.suburb %}<p class="mt-1 text-xs text-brand-800/70 line-clamp-1">{% if l.complex_name %}<span class="font-semibold text-brand-900">{{ l.complex_name }}</span>{% if l.address or l.suburb %}, {% endif %}{% endif %}{% if l.address %}{{ l.address }}{% if l.suburb %}, {{ l.suburb }}{% endif %}{% else %}{{ l.suburb }}{% endif %}</p>{% endif %}
     <p class="mt-1 text-xs text-brand-800/60 line-clamp-1">{% if l.listed_at %}Listed {{ l.listed_at|timesince }} ago{% endif %}</p>
+    {% if l.display_removed_at %}<p class="mt-0.5 text-xs text-red-700 line-clamp-1">Removed {{ l.display_removed_at|timesince }} ago</p>{% endif %}
     {% if l.display_notes %}<p class="mt-2 text-xs text-brand-900 bg-sand-50 border border-sand-200 rounded-md px-2 py-1.5 whitespace-pre-line line-clamp-3">{{ l.display_notes }}</p>{% endif %}
     <div class="mt-4 pt-4 border-t border-sand-100 flex items-center gap-4 text-xs text-brand-800/80 tabular">
       {% if l.bedrooms %}<span class="inline-flex items-center gap-1"><svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 18v-6a2 2 0 012-2h14a2 2 0 012 2v6"/><path d="M3 18h18"/><path d="M7 10V7a2 2 0 012-2h6a2 2 0 012 2v3"/></svg>{{ l.bedrooms|floatformat:"-1" }} bd</span>{% endif %}

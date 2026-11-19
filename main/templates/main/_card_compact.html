@@ -10,17 +10,22 @@
     <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M10 13a5 5 0 007.07 0l2-2a5 5 0 00-7.07-7.07l-1 1"/><path d="M14 11a5 5 0 00-7.07 0l-2 2a5 5 0 007.07 7.07l1-1"/></svg>
   </button>
   <div class="relative h-16 w-24 min-w-24 rounded-lg overflow-hidden bg-sand-100">
-    {% with first=l.images.all|first %}
-      {% if first %}<img src="{{ first.file.url }}" alt="" loading="lazy" class="h-full w-full object-cover">{% endif %}
-    {% endwith %}
-    {% if l.removed or l.group.removed %}
-      <span class="absolute inset-x-0 top-1/2 -translate-y-1/2 mx-auto w-fit bg-red-600/90 text-white text-[10px] font-semibold uppercase tracking-wider px-1.5 py-0.5 rounded">Removed</span>
+    {% if l.display_image %}<img src="{{ l.display_image.file.url }}" alt="" loading="lazy" class="h-full w-full object-cover">{% endif %}
+    {% if l.display_removed_at %}
+      <div class="absolute inset-x-0 top-1/2 -translate-y-1/2 bg-red-600 text-white text-center py-0.5 shadow">
+        <div class="text-[9px] font-bold uppercase tracking-widest leading-tight">Removed</div>
+        {% if l.display_removed_start %}<div class="text-[8px] font-medium uppercase tracking-wider opacity-90 leading-tight">{{ l.display_removed_start|timesince:l.display_removed_end }}</div>{% endif %}
+      </div>
     {% endif %}
   </div>
   <p class="font-display text-base font-semibold text-brand-900 whitespace-nowrap tabular">{{ l.price_text|default:"POA" }}</p>
+  {% if not l.display_is_liked %}
+    <svg class="h-5 w-5 text-red-600 shrink-0" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round" aria-label="Disliked"><circle cx="12" cy="12" r="10"/><path d="M8 16s1.5-2 4-2 4 2 4 2"/><line x1="9" y1="9" x2="9.01" y2="9"/><line x1="15" y1="9" x2="15.01" y2="9"/></svg>
+  {% endif %}
   <div class="flex-1 min-w-0">
-    {% if l.address %}<p class="text-xs text-brand-800/75 truncate">{{ l.address }}{% if l.suburb %}, {{ l.suburb }}{% endif %}</p>{% elif l.suburb %}<p class="text-xs text-brand-800/75 truncate">{{ l.suburb }}</p>{% endif %}
+    {% if l.complex_name or l.address or l.suburb %}<p class="text-xs text-brand-800/75 truncate">{% if l.complex_name %}<span class="font-semibold text-brand-900">{{ l.complex_name }}</span>{% if l.address or l.suburb %}, {% endif %}{% endif %}{% if l.address %}{{ l.address }}{% if l.suburb %}, {{ l.suburb }}{% endif %}{% else %}{{ l.suburb }}{% endif %}</p>{% endif %}
     <p class="text-xs text-brand-800/60 truncate">{% if l.listed_at %}Listed {{ l.listed_at|timesince }} ago{% if l.property_type %} · {{ l.property_type }}{% endif %}{% else %}{{ l.property_type }}{% endif %}</p>
+    {% if l.display_removed_at %}<p class="text-xs text-red-700 truncate">Removed {{ l.display_removed_at|timesince }} ago</p>{% endif %}
     {% if l.display_notes %}<p class="mt-0.5 text-xs text-brand-900 truncate">{{ l.display_notes|linebreaksbr }}</p>{% endif %}
   </div>
   <div class="hidden sm:flex items-center gap-4 text-xs text-brand-800/80 tabular">

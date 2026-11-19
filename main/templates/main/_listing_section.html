@@ -1,0 +1,13 @@
+<div class="mt-5">
+  <div x-show="layout==='grid'" class="grid grid-cols-1 sm:grid-cols-2 xl:grid-cols-3 2xl:grid-cols-4 gap-6">
+    {% for l in section %}{% include 'main/_card_grid.html' with l=l %}{% endfor %}
+  </div>
+
+  <div x-show="layout==='list'" x-cloak class="flex flex-col gap-4">
+    {% for l in section %}{% include 'main/_card_list.html' with l=l %}{% endfor %}
+  </div>
+
+  <div x-show="layout==='compact'" x-cloak class="overflow-hidden rounded-xl border border-sand-200 bg-white divide-y divide-sand-200">
+    {% for l in section %}{% include 'main/_card_compact.html' with l=l %}{% endfor %}
+  </div>
+</div>

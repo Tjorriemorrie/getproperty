@@ -34,8 +34,7 @@ LISTING_ID_RE = re.compile(r'/(T\d+)(?:[/?#]|$)')
 INT_RE = re.compile(r'[\d\s]+')
 DETAIL_CONCURRENCY = 10
 IMAGE_CONCURRENCY = 10
-RECHECK_FRACTION = 0.05
-RECHECK_MAX = 5
+RECHECK_FRACTION = 0.01
 REMOVED_MARKER_RE = re.compile(r'listing with ref\s+T\d+\s+is no longer available', re.IGNORECASE)
 
 
@@ -454,18 +453,67 @@ def _compute_phash(content: bytes) -> str:
         return ''
 
 
-def _download_listing_images(listing: Listing, image_urls: list[str]) -> int:
-    if not image_urls:
-        return 0
+def _existing_image_index(listing: Listing):
+    """Return (source URLs, content hashes, phash -> (file_size, pk)) for saved images.
+
+    The phash map keeps the largest saved copy of each visually identical image.
+    """
     existing_urls = set(listing.images.values_list('source_url', flat=True))
     existing_hashes = set(
         listing.images.exclude(image_hash='').values_list('image_hash', flat=True)
     )
-    # Map phash -> (file_size, ListingImage pk) for existing images
-    phash_best: dict[str, tuple[int, int]] = {}
+    phash_best: dict[str, tuple[int, int | None]] = {}
     for pk, ph, fs in listing.images.exclude(phash='').values_list('pk', 'phash', 'file_size'):
         if ph not in phash_best or fs > phash_best[ph][0]:
             phash_best[ph] = (fs, pk)
+    logger.info(
+        '🖼️ Indexed saved images for %s: urls=%s, hashes=%s, phashes=%s',
+        listing.listing_id,
+        len(existing_urls),
+        len(existing_hashes),
+        len(phash_best),
+    )
+    return existing_urls, existing_hashes, phash_best
+
+
+def _resolve_visual_duplicate(phash: str, file_size: int, phash_best: dict) -> str:
+    """Keep the larger copy of a visually identical image.
+
+    Returns 'skip' when a saved copy is at least as large, 'replaced' after
+    deleting a smaller saved copy, and 'new' when there is no visual match (or
+    the matched row is already gone).
+    """
+    if not phash or phash not in phash_best:
+        return 'new'
+    existing_size, existing_pk = phash_best[phash]
+    if file_size <= existing_size:
+        return 'skip'
+    try:
+        old_img = ListingImage.objects.get(pk=existing_pk)
+    except ListingImage.DoesNotExist:
+        logger.warning(
+            '🖼️ Smaller duplicate already gone, saving new copy: phash=%s, pk=%s, size=%s',
+            phash,
+            existing_pk,
+            file_size,
+        )
+        return 'new'
+    old_img.file.delete(save=False)
+    old_img.delete()
+    logger.info(
+        '🖼️ Replaced smaller duplicate: pk=%s, old_size=%s, new_size=%s',
+        existing_pk,
+        existing_size,
+        file_size,
+    )
+    return 'replaced'
+
+
+def _download_listing_images(listing: Listing, image_urls: list[str]) -> int:
+    if not image_urls:
+        logger.info('🖼️ No image URLs for %s', listing.listing_id)
+        return 0
+    existing_urls, existing_hashes, phash_best = _existing_image_index(listing)
 
     jobs = [
         {'listing_id': listing.listing_id, 'url': u, 'position': i}
@@ -473,9 +521,10 @@ def _download_listing_images(listing: Listing, image_urls: list[str]) -> int:
         if u not in existing_urls
     ]
     if not jobs:
+        logger.info('🖼️ All %s images already saved for %s', len(image_urls), listing.listing_id)
         return 0
 
-    logger.info('downloading %s images for %s', len(jobs), listing.listing_id)
+    logger.info('🖼️ Downloading %s images for %s', len(jobs), listing.listing_id)
     results = _fetch_image(jobs, parallel=IMAGE_CONCURRENCY)
     saved = 0
     skipped = 0
@@ -491,24 +540,11 @@ def _download_listing_images(listing: Listing, image_urls: list[str]) -> int:
 
         file_size = len(r['content'])
         phash = _compute_phash(r['content'])
-
-        # If a visually identical image exists, keep the larger (higher quality) one
-        if phash and phash in phash_best:
-            existing_size, existing_pk = phash_best[phash]
-            if file_size <= existing_size:
-                skipped += 1
-                continue
-            # New image is larger — replace the existing one
-            try:
-                old_img = ListingImage.objects.get(pk=existing_pk)
-                old_img.file.delete(save=False)
-                old_img.delete()
-                replaced += 1
-            except ListingImage.DoesNotExist:
-                pass
-
-        if phash:
-            phash_best[phash] = (file_size, None)  # pk filled after save
+        outcome = _resolve_visual_duplicate(phash, file_size, phash_best)
+        if outcome == 'skip':
+            skipped += 1
+            continue
+        replaced += outcome == 'replaced'
 
         img = ListingImage(
             listing=listing,
@@ -522,11 +558,14 @@ def _download_listing_images(listing: Listing, image_urls: list[str]) -> int:
         if phash:
             phash_best[phash] = (file_size, img.pk)
         saved += 1
-    if skipped:
-        logger.info('skipped %s duplicate images for %s', skipped, listing.listing_id)
-    if replaced:
-        logger.info('replaced %s lower-quality images for %s', replaced, listing.listing_id)
-    logger.info('saved %s/%s images for %s', saved, len(jobs), listing.listing_id)
+    logger.info(
+        '🖼️ Saved %s/%s images for %s: skipped_duplicates=%s, replaced_smaller=%s',
+        saved,
+        len(jobs),
+        listing.listing_id,
+        skipped,
+        replaced,
+    )
     return saved
 
 
@@ -563,45 +602,109 @@ def _fetch_recheck(req: Request, data: dict) -> dict | None:
 
 
 def _replace_listing_images(listing: Listing, image_urls: list[str]) -> int:
-    """Delete every existing image for the listing and download all from scratch."""
+    """Replace the listing's images with freshly downloaded copies.
+
+    Pre-fetches all blobs first; only deletes the existing set once at least one
+    new image has been fetched successfully. This prevents a broken/empty
+    recheck response from wiping good data.
+    """
+    if not image_urls:
+        return 0
+    jobs = [
+        {'listing_id': listing.listing_id, 'url': u, 'position': i}
+        for i, u in enumerate(image_urls)
+    ]
+    logger.info('pre-fetching %s replacement images for %s', len(jobs), listing.listing_id)
+    results = _fetch_image(jobs, parallel=IMAGE_CONCURRENCY)
+    fetched = [r for r in results if r and r.get('content')]
+    if not fetched:
+        logger.warning(
+            'no images downloaded for %s — keeping existing images intact',
+            listing.listing_id,
+        )
+        return 0
+
     for img in listing.images.all():
         img.file.delete(save=False)
         img.delete()
-    return _download_listing_images(listing, image_urls)
+
+    saved = 0
+    seen_hashes: set[str] = set()
+    phash_best: dict[str, tuple[int, int]] = {}
+    for r in fetched:
+        content_hash = hashlib.md5(r['content']).hexdigest()  # noqa: S324
+        if content_hash in seen_hashes:
+            continue
+        seen_hashes.add(content_hash)
+        file_size = len(r['content'])
+        phash = _compute_phash(r['content'])
+        if phash and phash in phash_best:
+            existing_size, existing_pk = phash_best[phash]
+            if file_size <= existing_size:
+                continue
+            try:
+                old_img = ListingImage.objects.get(pk=existing_pk)
+                old_img.file.delete(save=False)
+                old_img.delete()
+            except ListingImage.DoesNotExist:
+                pass
+        img = ListingImage(
+            listing=listing,
+            source_url=r['url'],
+            position=r['position'],
+            image_hash=content_hash,
+            phash=phash,
+            file_size=file_size,
+        )
+        img.file.save(_filename_for(r['url'], r['position']), ContentFile(r['content']), save=True)
+        if phash:
+            phash_best[phash] = (file_size, img.pk)
+        saved += 1
+    logger.info('saved %s/%s replacement images for %s', saved, len(jobs), listing.listing_id)
+    return saved
 
 
-def _refresh_group_removed(group_id: int) -> None:
-    """Recompute group.removed: True iff every listing in the group is removed."""
-    group = ListingGroup.objects.filter(pk=group_id).first()
-    if group is None:
-        return
-    listings = list(group.listings.all())
-    if not listings:
-        return
-    all_removed = all(listing.removed for listing in listings)
-    if group.removed != all_removed:
-        group.removed = all_removed
-        group.save(update_fields=['removed'])
+def _mark_removed(listing: Listing, now) -> None:
+    if listing.removed_at is None:
+        listing.removed_at = now
+    listing.rechecked_at = now
+    listing.save(update_fields=['removed_at', 'rechecked_at'])
+    if listing.group_id:
+        group = ListingGroup.objects.filter(pk=listing.group_id).first()
+        if group:
+            group.refresh_removed_at()
 
 
 def _apply_recheck_result(d: dict) -> int:
-    """Persist a single recheck outcome. Returns number of images saved."""
+    """Persist a single recheck outcome. Returns number of images saved.
+
+    Only overwrites listing fields/images when the parse clearly indicates the
+    listing is still available (title or price text or headline AND ≥1 image).
+    Otherwise marks the listing removed without touching existing data.
+    """
     listing = Listing.objects.filter(listing_id=d['listing_id']).first()
     if listing is None:
         return 0
 
     now = timezone.now()
     if d.get('removed'):
-        listing.removed = True
-        listing.rechecked_at = now
-        listing.save(update_fields=['removed', 'rechecked_at'])
-        if listing.group_id:
-            _refresh_group_removed(listing.group_id)
+        _mark_removed(listing, now)
         return 0
 
     images = d.pop('images', [])
+    has_text = bool(d.get('title') or d.get('price_text') or d.get('headline'))
+    if not has_text or not images:
+        logger.warning(
+            'recheck %s parse missing key fields (text=%s images=%s) — marking removed',
+            d['listing_id'],
+            has_text,
+            len(images),
+        )
+        _mark_removed(listing, now)
+        return 0
+
     update = {k: v for k, v in d.items() if k not in ('index', 'total') and v is not None}
-    update['removed'] = False
+    update['removed_at'] = None
     update['rechecked_at'] = now
     with transaction.atomic():
         for k, v in update.items():
@@ -609,7 +712,9 @@ def _apply_recheck_result(d: dict) -> int:
         listing.save()
     saved = _replace_listing_images(listing, images)
     if listing.group_id:
-        _refresh_group_removed(listing.group_id)
+        group = ListingGroup.objects.filter(pk=listing.group_id).first()
+        if group:
+            group.refresh_removed_at()
     return saved
 
 
@@ -619,12 +724,12 @@ def recheck_oldest(fraction: float = RECHECK_FRACTION) -> dict:
     Picks ``ceil(active_total * fraction)`` listings ordered by ``rechecked_at`` ASC
     (nulls first) then ``first_seen_at`` ASC.
     """
-    qs = Listing.objects.filter(removed=False)
+    qs = Listing.objects.filter(removed_at__isnull=True)
     total_active = qs.count()
     if total_active == 0:
         return {'rechecked': 0, 'removed': 0, 'images': 0}
 
-    n = min(RECHECK_MAX, math.ceil(total_active * fraction))
+    n = math.ceil(total_active * fraction)
     rows = list(
         qs.order_by(F('rechecked_at').asc(nulls_first=True), 'first_seen_at').values(
             'listing_id', 'url'
@@ -691,11 +796,4 @@ def scrape(start_url: str | None = None, max_pages: int | None = None, full: boo
                     image_count,
                 )
 
-    result = {'new_listings': new_count, 'images': image_count}
-    if not full:
-        recheck = recheck_oldest()
-        result['rechecked'] = recheck['rechecked']
-        result['removed'] = recheck['removed']
-        result['images'] += recheck['images']
-
-    return result
+    return {'new_listings': new_count, 'images': image_count}

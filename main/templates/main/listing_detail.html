@@ -5,7 +5,6 @@
 {% block content %}
 <div class="w-full px-4 sm:px-6 lg:px-10 pt-6 flex items-center justify-between flex-wrap gap-4">
   <a href="{% url 'main:listing_list' %}#listing-{{ anchor_listing_id }}"
-     onclick="if(history.length>1&&document.referrer.split('#')[0].split('?')[0].replace(/\/$/,'')===(location.origin+'{% url 'main:listing_list' %}').replace(/\/$/,'')){history.back();return false;}"
      class="inline-flex items-center gap-1.5 text-sm text-brand-800/70 hover:text-brand-900">
     <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M15 18l-6-6 6-6"/></svg>
     Back to listings
@@ -64,6 +63,12 @@
     </select>
     <noscript><button type="submit" class="text-xs underline">Save</button></noscript>
   </form>
+  {% if listing.removed_at %}
+    <p class="mt-3 text-xs text-brand-800/60">Active for {{ active_start|timesince:active_end }} ({{ listing.removed_at|date:"M d, Y" }} removed)</p>
+    <p class="mt-0.5 text-xs text-red-700">Removed {{ listing.removed_at|timesince }} ago</p>
+  {% else %}
+    <p class="mt-3 text-xs text-brand-800/60">Active for {{ active_start|timesince }} (since {{ active_start|date:"M d, Y" }})</p>
+  {% endif %}
   <h1 class="mt-2 font-display text-3xl sm:text-4xl font-semibold tracking-tight text-brand-900">
     {{ listing.title|default:listing.headline|default:"Untitled listing" }}
   </h1>
@@ -83,11 +88,40 @@
 </section>
 
 <script>
+  function complexEditor() {
+    return {
+      name: "{{ listing.complex_name|escapejs }}",
+      status: '',
+      async save() {
+        this.status = 'Saving…';
+        const sent = this.name;
+        try {
+          const fd = new FormData();
+          fd.append('complex_name', sent);
+          fd.append('csrfmiddlewaretoken', document.querySelector('[name=csrfmiddlewaretoken]').value);
+          const res = await fetch('{% url "main:set_complex_name" listing.listing_id %}', { method: 'POST', body: fd });
+          if (!res.ok) throw new Error('save failed');
+          const data = await res.json();
+          // The server trims and folds onto an existing spelling — show what was
+          // stored, unless the user has kept typing since this save started.
+          if (this.name === sent) this.name = data.complex_name;
+          this.status = 'Saved';
+          setTimeout(() => { if (this.status === 'Saved') this.status = ''; }, 1500);
+        } catch (e) {
+          this.status = 'Save failed';
+        }
+      },
+    };
+  }
+
   function notesEditor() {
     return {
       notes: "{{ notes_value|escapejs }}",
       status: '',
       saving: false,
+      isLiked: {{ is_liked_value|yesno:"true,false" }},
+      likedStatus: '',
+      likedSaving: false,
       async save() {
         this.status = 'Saving…';
         this.saving = true;
@@ -105,6 +139,25 @@
           this.saving = false;
         }
       },
+      async toggleLiked() {
+        this.isLiked = !this.isLiked;
+        this.likedStatus = 'Saving…';
+        this.likedSaving = true;
+        try {
+          const fd = new FormData();
+          fd.append('is_liked', this.isLiked ? '1' : '0');
+          fd.append('csrfmiddlewaretoken', document.querySelector('[name=csrfmiddlewaretoken]').value);
+          const res = await fetch('{% url "main:set_liked" listing.listing_id %}', { method: 'POST', body: fd });
+          if (!res.ok) throw new Error('save failed');
+          this.likedStatus = 'Saved';
+          setTimeout(() => { if (!this.likedSaving) this.likedStatus = ''; }, 1500);
+        } catch (e) {
+          this.likedStatus = 'Save failed';
+          this.isLiked = !this.isLiked;
+        } finally {
+          this.likedSaving = false;
+        }
+      },
     };
   }
 </script>
@@ -114,8 +167,15 @@
 <section class="w-full px-4 sm:px-6 lg:px-10 mt-6 grid grid-cols-1 lg:grid-cols-3 gap-6">
   <aside class="lg:col-span-1 order-2 lg:order-1">
     <div class="rounded-2xl border border-sand-200 bg-white p-6 shadow-card">
-      <p class="text-xs uppercase tracking-widest text-brand-700 font-medium">Asking price</p>
-      <p class="mt-1 font-display text-3xl sm:text-4xl font-semibold text-brand-900 tabular">{{ listing.price_text|default:"POA" }}</p>
+      <div class="flex items-start justify-between gap-3">
+        <div>
+          <p class="text-xs uppercase tracking-widest text-brand-700 font-medium">Asking price</p>
+          <p class="mt-1 font-display text-3xl sm:text-4xl font-semibold text-brand-900 tabular">{{ listing.price_text|default:"POA" }}</p>
+        </div>
+        {% if listing.removed_at %}
+          <span class="shrink-0 inline-flex items-center bg-red-600 text-white text-xs font-bold uppercase tracking-[0.25em] px-3 py-1.5 rounded-md shadow-sm">Removed</span>
+        {% endif %}
+      </div>
 
       <div class="mt-5 grid grid-cols-2 gap-2">
         {% if listing.bedrooms %}<div class="rounded-lg border border-sand-200 bg-sand-50/60 p-3"><p class="text-[11px] text-brand-800/60">Bedrooms</p><p class="mt-0.5 font-display text-xl font-semibold tabular">{{ listing.bedrooms|floatformat:"-1" }}</p></div>{% endif %}
@@ -127,6 +187,20 @@
         {% if listing.rates_and_taxes %}<div class="rounded-lg border border-sand-200 bg-sand-50/60 p-3"><p class="text-[11px] text-brand-800/60">Rates &amp; taxes</p><p class="mt-0.5 font-display text-base font-semibold tabular">R {{ listing.rates_and_taxes }}</p></div>{% endif %}
         {% if listing.levies %}
           <div class="rounded-lg border border-sand-200 bg-sand-50/60 p-3"><p class="text-[11px] text-brand-800/60">Levies</p><p class="mt-0.5 font-display text-base font-semibold tabular">R {{ listing.levies }}</p></div>
+          <div x-data="complexEditor()"
+               class="rounded-lg border border-sand-200 bg-sand-50/60 p-3 transition focus-within:bg-white focus-within:ring-2 focus-within:ring-brand-600/30">
+            <div class="flex items-baseline justify-between gap-2">
+              <label for="complex-name" class="text-[11px] text-brand-800/60">Complex</label>
+              <span class="text-[10px] text-brand-800/50" x-text="status"></span>
+            </div>
+            <input id="complex-name" type="text" list="complex-names" maxlength="200" autocomplete="off"
+                   placeholder="Add name" title="Shared across duplicates"
+                   x-model="name" @change="save()"
+                   class="mt-0.5 block w-full truncate border-0 bg-transparent p-0 font-display text-base font-semibold text-brand-900 placeholder:font-normal placeholder:text-brand-700/60 focus:outline-none focus:ring-0">
+            <datalist id="complex-names">
+              {% for n in complex_names %}<option value="{{ n }}"></option>{% endfor %}
+            </datalist>
+          </div>
         {% else %}
           <form method="post" action="{% url 'main:set_levy_placeholder' listing.listing_id %}" class="contents">
             {% csrf_token %}
@@ -164,6 +238,20 @@
 
     <div class="mt-4 rounded-2xl border border-sand-200 bg-white p-6 shadow-card" x-data="notesEditor()">
       <div class="flex items-center justify-between">
+        <span class="text-xs uppercase tracking-widest text-brand-700 font-medium">Do you like it?</span>
+        <span class="text-[11px] text-brand-800/50" x-text="likedStatus"></span>
+      </div>
+      <div class="mt-2 flex items-center gap-3">
+        <button type="button" role="switch" :aria-checked="isLiked" @click="toggleLiked()"
+                :class="isLiked ? 'bg-brand-600' : 'bg-sand-300'"
+                class="relative inline-flex h-6 w-11 shrink-0 items-center rounded-full transition focus:outline-none focus:ring-2 focus:ring-brand-600/30">
+          <span :class="isLiked ? 'translate-x-6' : 'translate-x-1'"
+                class="inline-block h-4 w-4 transform rounded-full bg-white shadow transition"></span>
+        </button>
+        <span class="text-sm text-brand-900" x-text="isLiked ? 'Yes' : 'No'"></span>
+      </div>
+
+      <div class="mt-5 flex items-center justify-between">
         <label for="listing-notes" class="text-xs uppercase tracking-widest text-brand-700 font-medium">Notes</label>
         <span class="text-[11px] text-brand-800/50" x-text="status"></span>
       </div>
@@ -173,13 +261,31 @@
     </div>
   </aside>
 
-  <div class="lg:col-span-2 order-1 lg:order-2">
+  <div class="lg:col-span-2 order-1 lg:order-2"
+       x-data="{ activeImageId: {% if images %}{{ images.0.id }}{% else %}0{% endif %}, mainImageId: {{ main_image_id }}, mainStatus: '',
+                async setAsMain() {
+                  if (!this.activeImageId || this.activeImageId === this.mainImageId) return;
+                  this.mainStatus = 'Saving…';
+                  try {
+                    const fd = new FormData();
+                    fd.append('image_id', this.activeImageId);
+                    fd.append('csrfmiddlewaretoken', document.querySelector('[name=csrfmiddlewaretoken]').value);
+                    const res = await fetch('{% url "main:set_main_image" listing.listing_id %}', { method: 'POST', body: fd });
+                    if (!res.ok) throw new Error('save failed');
+                    this.mainImageId = this.activeImageId;
+                    this.mainStatus = 'Set as main';
+                    setTimeout(() => { this.mainStatus = ''; }, 1500);
+                  } catch (e) {
+                    this.mainStatus = 'Save failed';
+                  }
+                } }"
+       @gallery:change.window="activeImageId = $event.detail.imageId">
     {% if images %}
       <div class="relative rounded-3xl overflow-hidden bg-sand-100 shadow-card">
         <div class="swiper gallery-main aspect-[16/10]">
           <div class="swiper-wrapper">
             {% for img in images %}
-              <div class="swiper-slide bg-sand-100">
+              <div class="swiper-slide bg-sand-100" data-image-id="{{ img.id }}">
                 <img src="{{ img.file.url }}" alt="{{ listing.title }} photo {{ forloop.counter }}"
                      class="h-full w-full object-cover">
               </div>
@@ -191,13 +297,25 @@
           <button type="button" class="gallery-next absolute right-4 top-1/2 -translate-y-1/2 z-10 inline-flex items-center justify-center h-11 w-11 rounded-full bg-black/45 hover:bg-black/65 text-white shadow-lg transition">
             <svg class="h-5 w-5" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2.5" stroke-linecap="round" stroke-linejoin="round"><path d="M9 6l6 6-6 6"/></svg>
           </button>
+          <button type="button" @click="setAsMain()"
+                  :disabled="activeImageId === mainImageId"
+                  :title="activeImageId === mainImageId ? 'Already the main image' : 'Set as main image'"
+                  :class="activeImageId === mainImageId ? 'bg-yellow-400 text-brand-900 cursor-not-allowed' : 'bg-black/45 hover:bg-black/65 text-white'"
+                  class="absolute top-4 right-4 z-10 inline-flex items-center justify-center h-11 w-11 rounded-full shadow-lg transition disabled:opacity-90">
+            <svg class="h-5 w-5" viewBox="0 0 24 24" :fill="activeImageId === mainImageId ? 'currentColor' : 'none'" stroke="currentColor" stroke-width="2" stroke-linejoin="round">
+              <path d="M12 2l2.95 6.18 6.82.99-4.94 4.81 1.17 6.79L12 17.77l-6 3 1.17-6.79L2.23 9.17l6.82-.99L12 2z"/>
+            </svg>
+          </button>
+          <span x-show="mainStatus" x-cloak
+                class="absolute top-4 right-20 z-10 inline-flex items-center h-9 px-3 rounded-full bg-black/55 text-white text-xs"
+                x-text="mainStatus"></span>
           <div class="swiper-pagination !bottom-4"></div>
         </div>
         {% if images|length > 1 %}
-        <div class="swiper gallery-thumbs bg-white border-t border-sand-200 p-3">
+        <div class="swiper gallery-thumbs bg-white border-t border-sand-200 p-2">
           <div class="swiper-wrapper">
             {% for img in images %}
-              <div class="swiper-slide !w-24 h-16 rounded-lg overflow-hidden cursor-pointer opacity-60 hover:opacity-100 border-2 border-transparent transition">
+              <div class="swiper-slide !w-24 h-16 rounded-md overflow-hidden cursor-pointer opacity-60 hover:opacity-100 border-2 border-transparent transition">
                 <img src="{{ img.file.url }}" alt="" class="h-full w-full object-cover">
               </div>
             {% endfor %}
@@ -243,6 +361,18 @@
       {% endfor %}
     </div>
   {% endif %}
+
+  <div class="mt-12 mb-10 flex justify-end border-t border-sand-100 pt-6">
+    <form method="post" action="{% url 'main:delete_listing' listing.listing_id %}"
+          onsubmit="return confirm('Permanently delete this listing and its images? This cannot be undone.');">
+      {% csrf_token %}
+      <button type="submit"
+              class="inline-flex items-center gap-2 h-10 px-4 rounded-lg border border-red-200 bg-white text-sm font-medium text-red-700 hover:bg-red-50 hover:border-red-300 transition">
+        <svg class="h-4 w-4" viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M3 6h18"/><path d="M8 6V4a2 2 0 012-2h4a2 2 0 012 2v2"/><path d="M19 6l-1 14a2 2 0 01-2 2H8a2 2 0 01-2-2L5 6"/><path d="M10 11v6"/><path d="M14 11v6"/></svg>
+        Delete listing
+      </button>
+    </form>
+  </div>
 </section>
 {% endblock %}
 
@@ -253,10 +383,18 @@
     var thumbsEl = document.querySelector('.gallery-thumbs');
     var thumbs = thumbsEl ? new Swiper('.gallery-thumbs', {
       slidesPerView: 'auto',
-      spaceBetween: 8,
-      freeMode: true,
+      spaceBetween: 6,
+      freeMode: { enabled: true, momentum: true, momentumRatio: 0.6, sticky: false },
+      slideToClickedSlide: true,
       watchSlidesProgress: true,
+      speed: 300,
+      mousewheel: { forceToAxis: false, sensitivity: 2, releaseOnEdges: false },
     }) : null;
+    function emitActiveImage(swiper) {
+      var slide = swiper.slides[swiper.activeIndex];
+      var id = slide && slide.dataset && slide.dataset.imageId;
+      if (id) window.dispatchEvent(new CustomEvent('gallery:change', { detail: { imageId: parseInt(id, 10) } }));
+    }
     new Swiper('.gallery-main', {
       loop: true,
       speed: 500,
@@ -264,6 +402,10 @@
       navigation: { nextEl: '.gallery-next', prevEl: '.gallery-prev' },
       pagination: { el: '.swiper-pagination', type: 'fraction' },
       thumbs: thumbs ? { swiper: thumbs } : undefined,
+      on: {
+        init: emitActiveImage,
+        slideChange: emitActiveImage,
+      },
     });
   });
 </script>
