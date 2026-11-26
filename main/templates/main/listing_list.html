@@ -45,36 +45,36 @@
 
         {% include 'main/_facet_checkbox.html' with title='Property type' name='property_type' items=type_facet %}
 
-        <!-- Levies binary -->
+        <!-- In a complex (Listing.is_complex) -->
         <div class="rounded-xl bg-white border border-sand-200 shadow-card px-3 py-2.5">
-          <h3 class="font-display text-xs font-semibold uppercase tracking-wide text-brand-800/70 mb-1.5">Levies</h3>
+          <h3 class="font-display text-xs font-semibold uppercase tracking-wide text-brand-800/70 mb-1.5">In a complex</h3>
           <div class="text-sm">
             <label class="flex items-center justify-between py-0.5 px-1.5 -mx-1.5 rounded hover:bg-sand-50 cursor-pointer">
               <span class="flex items-center gap-1.5">
-                <input type="radio" name="has_levies" value="" {% if filters.has_levies == '' %}checked{% endif %}
+                <input type="radio" name="is_complex" value="" {% if filters.is_complex == '' %}checked{% endif %}
                        onchange="document.getElementById('filters').submit()"
                        class="text-brand-600 border-sand-300 focus:ring-brand-500 h-3.5 w-3.5">
                 <span>Any</span>
               </span>
-              <span class="text-[11px] tabular text-brand-800/50">{{ levies_counts.any }}</span>
+              <span class="text-[11px] tabular text-brand-800/50">{{ complex_counts.any }}</span>
             </label>
             <label class="flex items-center justify-between py-0.5 px-1.5 -mx-1.5 rounded hover:bg-sand-50 cursor-pointer">
               <span class="flex items-center gap-1.5">
-                <input type="radio" name="has_levies" value="yes" {% if filters.has_levies == 'yes' %}checked{% endif %}
+                <input type="radio" name="is_complex" value="yes" {% if filters.is_complex == 'yes' %}checked{% endif %}
                        onchange="document.getElementById('filters').submit()"
                        class="text-brand-600 border-sand-300 focus:ring-brand-500 h-3.5 w-3.5">
-                <span>With levies</span>
+                <span>Yes</span>
               </span>
-              <span class="text-[11px] tabular text-brand-800/50">{{ levies_counts.yes }}</span>
+              <span class="text-[11px] tabular text-brand-800/50">{{ complex_counts.yes }}</span>
             </label>
             <label class="flex items-center justify-between py-0.5 px-1.5 -mx-1.5 rounded hover:bg-sand-50 cursor-pointer">
               <span class="flex items-center gap-1.5">
-                <input type="radio" name="has_levies" value="no" {% if filters.has_levies == 'no' %}checked{% endif %}
+                <input type="radio" name="is_complex" value="no" {% if filters.is_complex == 'no' %}checked{% endif %}
                        onchange="document.getElementById('filters').submit()"
                        class="text-brand-600 border-sand-300 focus:ring-brand-500 h-3.5 w-3.5">
-                <span>No levies</span>
+                <span>No</span>
               </span>
-              <span class="text-[11px] tabular text-brand-800/50">{{ levies_counts.no }}</span>
+              <span class="text-[11px] tabular text-brand-800/50">{{ complex_counts.no }}</span>
             </label>
           </div>
         </div>
@@ -220,7 +220,7 @@
             <span class="text-sm text-brand-800/60 tabular">{{ removed_listings|length }}</span>
             <div class="flex-1 border-t border-sand-200"></div>
           </div>
-          <p class="mt-1 text-xs text-brand-800/60">No longer available on the source site — still matched by your filters.</p>
+          <p class="mt-1 text-xs text-brand-800/60">No longer available on the source site — still matched by your filters. Most recently removed first.</p>
           {% include 'main/_listing_section.html' with section=removed_listings %}
         {% endif %}
       {% endif %}

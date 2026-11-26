@@ -81,6 +81,10 @@ class Listing(models.Model):
 
     rates_and_taxes = models.IntegerField(null=True, blank=True)
     levies = models.IntegerField(null=True, blank=True)
+    # Whether the listing is in a sectional-title complex. Toggled by hand on the
+    # detail page (kept identical across a ListingGroup, like complex_name); the
+    # scraper only sets it on newly created listings that list levies.
+    is_complex = models.BooleanField(default=False, db_index=True)
     # Hand-entered sectional-title complex name. Kept identical across every
     # listing in a ListingGroup (see views.set_complex_name / mark_similar).
     complex_name = models.CharField(max_length=200, blank=True, default='', db_index=True)

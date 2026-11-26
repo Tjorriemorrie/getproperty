@@ -91,7 +91,29 @@
   function complexEditor() {
     return {
       name: "{{ listing.complex_name|escapejs }}",
+      isComplex: {{ listing.is_complex|yesno:"true,false" }},
       status: '',
+      flash(text) {
+        this.status = text;
+        setTimeout(() => { if (this.status === text) this.status = ''; }, 1500);
+      },
+      async toggleComplex() {
+        // Flip at once so the row reacts on click; roll back if the save fails.
+        this.isComplex = !this.isComplex;
+        const sent = this.isComplex;
+        this.status = 'Saving…';
+        try {
+          const fd = new FormData();
+          fd.append('is_complex', sent ? '1' : '0');
+          fd.append('csrfmiddlewaretoken', document.querySelector('[name=csrfmiddlewaretoken]').value);
+          const res = await fetch('{% url "main:set_is_complex" listing.listing_id %}', { method: 'POST', body: fd });
+          if (!res.ok) throw new Error('save failed');
+          this.flash('Saved');
+        } catch (e) {
+          if (this.isComplex === sent) this.isComplex = !sent;
+          this.status = 'Save failed';
+        }
+      },
       async save() {
         this.status = 'Saving…';
         const sent = this.name;
@@ -185,10 +207,39 @@
         {% if listing.floor_size %}<div class="rounded-lg border border-sand-200 bg-sand-50/60 p-3"><p class="text-[11px] text-brand-800/60">Floor size</p><p class="mt-0.5 font-display text-base font-semibold">{{ listing.floor_size }}</p></div>{% endif %}
         {% if listing.erf_size %}<div class="rounded-lg border border-sand-200 bg-sand-50/60 p-3"><p class="text-[11px] text-brand-800/60">Erf size</p><p class="mt-0.5 font-display text-base font-semibold">{{ listing.erf_size }}</p></div>{% endif %}
         {% if listing.rates_and_taxes %}<div class="rounded-lg border border-sand-200 bg-sand-50/60 p-3"><p class="text-[11px] text-brand-800/60">Rates &amp; taxes</p><p class="mt-0.5 font-display text-base font-semibold tabular">R {{ listing.rates_and_taxes }}</p></div>{% endif %}
-        {% if listing.levies %}
-          <div class="rounded-lg border border-sand-200 bg-sand-50/60 p-3"><p class="text-[11px] text-brand-800/60">Levies</p><p class="mt-0.5 font-display text-base font-semibold tabular">R {{ listing.levies }}</p></div>
-          <div x-data="complexEditor()"
-               class="rounded-lg border border-sand-200 bg-sand-50/60 p-3 transition focus-within:bg-white focus-within:ring-2 focus-within:ring-brand-600/30">
+        {# In-a-complex switch, Levies and Complex name share one row; the knob up means "in a complex". #}
+        <div x-data="complexEditor()" class="col-span-2 flex items-stretch gap-2">
+          <div class="flex shrink-0 items-center rounded-lg border border-sand-200 bg-sand-50/60 px-2.5">
+            <button type="button" role="switch" :aria-checked="isComplex" aria-label="In a complex"
+                    @click="toggleComplex()" :title="isComplex ? 'In a complex (click to turn off)' : 'Not in a complex (click to turn on)'"
+                    :class="isComplex ? 'bg-brand-600' : 'bg-sand-300'"
+                    class="relative h-14 w-7 rounded-full transition-colors focus:outline-none focus-visible:ring-2 focus-visible:ring-brand-600/40 focus-visible:ring-offset-2 focus-visible:ring-offset-sand-50 motion-reduce:transition-none">
+              <span :class="isComplex ? 'translate-y-0' : 'translate-y-7'"
+                    class="absolute left-1 top-1 h-5 w-5 rounded-full bg-white shadow transition-transform motion-reduce:transition-none"></span>
+            </button>
+          </div>
+
+          <div x-show="!isComplex" {% if listing.is_complex %}style="display: none"{% endif %}
+               class="min-w-0 flex-1 rounded-lg border border-dashed border-sand-300 bg-white/40 p-3">
+            <div class="flex items-baseline justify-between gap-2">
+              <p class="text-[11px] text-brand-800/60">In a complex</p>
+              <span class="text-[10px] text-brand-800/50" x-text="status"></span>
+            </div>
+            <p class="mt-0.5 font-display text-base font-semibold text-brand-700/70">No</p>
+          </div>
+
+          <div x-show="isComplex" {% if not listing.is_complex %}style="display: none"{% endif %}
+               class="min-w-0 flex-1 rounded-lg border border-sand-200 bg-sand-50/60 p-3">
+            <p class="text-[11px] text-brand-800/60">Levies</p>
+            {% if listing.levies %}
+              <p class="mt-0.5 font-display text-base font-semibold tabular">R {{ listing.levies }}</p>
+            {% else %}
+              <p class="mt-0.5 font-display text-base font-semibold text-brand-700/60" title="No levy amount on the listing">—</p>
+            {% endif %}
+          </div>
+
+          <div x-show="isComplex" {% if not listing.is_complex %}style="display: none"{% endif %}
+               class="min-w-0 flex-[1.4] rounded-lg border border-sand-200 bg-sand-50/60 p-3 transition focus-within:bg-white focus-within:ring-2 focus-within:ring-brand-600/30">
             <div class="flex items-baseline justify-between gap-2">
               <label for="complex-name" class="text-[11px] text-brand-800/60">Complex</label>
               <span class="text-[10px] text-brand-800/50" x-text="status"></span>
@@ -201,17 +252,7 @@
               {% for n in complex_names %}<option value="{{ n }}"></option>{% endfor %}
             </datalist>
           </div>
-        {% else %}
-          <form method="post" action="{% url 'main:set_levy_placeholder' listing.listing_id %}" class="contents">
-            {% csrf_token %}
-            <button type="submit"
-                    class="rounded-lg border border-dashed border-sand-300 bg-white/40 p-3 text-left hover:bg-sand-50 transition"
-                    title="Set levies to R 1 so this listing isn't filtered as 'no levies'">
-              <p class="text-[11px] text-brand-800/60">Levies</p>
-              <p class="mt-0.5 font-display text-base font-semibold text-brand-700">+ Set placeholder</p>
-            </button>
-          </form>
-        {% endif %}
+        </div>
       </div>
 
       <div class="mt-5 space-y-2.5 text-sm border-t border-sand-100 pt-4">

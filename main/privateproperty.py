@@ -12,7 +12,7 @@ import time as time_mod
 from concurrent.futures import ThreadPoolExecutor, as_completed
 from datetime import datetime, time
 from datetime import timezone as dt_timezone
-from urllib.parse import urljoin
+from urllib.parse import parse_qsl, urlencode, urljoin, urlsplit, urlunsplit
 
 import imagehash
 from botasaurus.request import Request, request
@@ -20,7 +20,7 @@ from botasaurus.soupify import soupify
 from bs4 import BeautifulSoup
 from django.core.files.base import ContentFile
 from django.db import transaction
-from django.db.models import F
+from django.db.models.functions import Coalesce
 from django.utils import timezone
 from PIL import Image
 
@@ -35,7 +35,17 @@ INT_RE = re.compile(r'[\d\s]+')
 DETAIL_CONCURRENCY = 10
 IMAGE_CONCURRENCY = 10
 RECHECK_FRACTION = 0.01
-REMOVED_MARKER_RE = re.compile(r'listing with ref\s+T\d+\s+is no longer available', re.IGNORECASE)
+RECHECK_PROGRESS_EVERY = 50
+# A removed listing redirects to its suburb's list page, which says e.g. "the listing with
+# ref <strong>T4534103</strong> is no longer available" (the ref is wrapped in markup).
+REMOVED_MARKER_RE = re.compile(
+    r'listing with ref\s*(?:<[^>]*>\s*)*T\d+\s*(?:<[^>]*>\s*)*is no longer available',
+    re.IGNORECASE,
+)
+# HTTP statuses that confirm a listing is gone; any other 4xx/5xx is treated as a failed fetch.
+GONE_STATUSES = (404, 410)
+HTTP_ERROR_MIN = 400
+RESULT_COUNT_RE = re.compile(r'(\d[\d \xa0]*)\s*properties', re.IGNORECASE)
 
 
 def _extract_listing_id(url: str) -> str | None:
@@ -94,6 +104,24 @@ def _find_next_page(current_url: str, html: str) -> str | None:
         if href != current_url:
             return href
     return None
+
+
+def _keep_base_query(url: str, base_url: str) -> str:
+    """Carry the start URL's query (e.g. the date sort) onto a pagination link.
+
+    The site's next-page links are a bare ``?page=N``: following them as-is drops
+    ``sorttype``/``sortorder``, so pages 2+ come back in a different order and a walk
+    silently skips some listings and repeats others.
+    """
+    parts = urlsplit(url)
+    query = {**dict(parse_qsl(urlsplit(base_url).query)), **dict(parse_qsl(parts.query))}
+    return urlunsplit(parts._replace(query=urlencode(query)))
+
+
+def _parse_result_count(html: str) -> int | None:
+    """Return the search's stated total (the "118 properties" heading), if present."""
+    m = RESULT_COUNT_RE.search(soupify(html).get_text(' '))
+    return _parse_int(m.group(1)) if m else None
 
 
 PP_IMAGE_RE = re.compile(r'(https://images\.pp\.co\.za/listing/\d+/[^/]+)/\d+/\d+/')
@@ -380,60 +408,86 @@ def _fetch_image(req: Request, data: dict) -> dict | None:
         return None
 
 
-def collect_new_listing_cards(
-    start_url: str, max_pages: int | None = None, full: bool = False
-) -> list[dict]:
-    """Walk list pages from newest and return cards not yet stored (unless ``full``)."""
-    existing = set(Listing.objects.values_list('listing_id', flat=True))
-    url: str | None = start_url
+def walk_list_pages(start_url: str, max_pages: int | None = None) -> tuple[list[dict], bool]:
+    """Walk every list page of a search; return ``(cards, complete)``.
+
+    Always walks to the end rather than stopping at the first known listing: featured
+    (older) cards are mixed in among the newest ones, so an early stop skips new listings
+    that sit after them. ``complete`` is True only when the walk ran out of pages on its
+    own (not cut short by ``max_pages`` or an empty page), i.e. ``cards`` is the full set
+    of live listings for the search.
+    """
+    logger.info('📄 Walking list pages: start_url=%s, max_pages=%s', start_url, max_pages)
+    url = start_url
     pages = 0
+    stated: int | None = None
     cards_out: list[dict] = []
     seen: set[str] = set()
+    complete = False
 
-    while url:
+    while True:
         pages += 1
-        logger.info('fetching list page %s: %s', pages, url)
+        logger.info('📄 Fetching list page %s: %s', pages, url)
         html = _fetch(url)
+        if pages == 1:
+            stated = _parse_result_count(html)
         cards = _parse_list_page(html)
         if not cards:
-            logger.warning('no cards parsed on %s', url)
+            logger.warning('⚠️ No cards parsed, walk incomplete: page=%s, url=%s', pages, url)
             break
-
-        hit_existing = False
         for c in cards:
-            if c['listing_id'] in seen:
-                continue
-            if not full and c['listing_id'] in existing:
-                logger.info('hit existing listing %s — stopping', c['listing_id'])
-                hit_existing = True
-                break
-            seen.add(c['listing_id'])
-            cards_out.append(c)
+            if c['listing_id'] not in seen:
+                seen.add(c['listing_id'])
+                cards_out.append(c)
 
-        if hit_existing:
+        next_url = _find_next_page(url, html)
+        next_url = _keep_base_query(next_url, start_url) if next_url else None
+        if not next_url or next_url == url:
+            complete = True
             break
         if max_pages and pages >= max_pages:
             break
-
-        next_url = _find_next_page(url, html)
-        if not next_url or next_url == url:
-            break
         url = next_url
 
-    return cards_out
+    if complete and stated is not None and len(cards_out) < stated:
+        logger.warning(
+            '⚠️ Walk found fewer cards than the site states: start_url=%s, cards=%s, stated=%s',
+            start_url,
+            len(cards_out),
+            stated,
+        )
+    logger.info(
+        '📄 Walked list pages: start_url=%s, pages=%s, cards=%s, stated=%s, complete=%s',
+        start_url,
+        pages,
+        len(cards_out),
+        stated,
+        complete,
+    )
+    return cards_out, complete
 
 
 def _save_listing(detail: dict) -> Listing:
     images = detail.pop('images', [])
     with transaction.atomic():
         defaults = {k: v for k, v in detail.items() if v is not None}
+        # A new listing with levies starts out flagged as a complex; after that
+        # the flag is only changed by hand, so updates never touch it.
         listing, created = Listing.objects.update_or_create(
             listing_id=detail['listing_id'],
             defaults=defaults,
+            create_defaults={**defaults, 'is_complex': bool(defaults.get('levies'))},
         )
         if created and listing.listed_at is None:
             listing.listed_at = timezone.now()
             listing.save(update_fields=['listed_at'])
+    logger.info(
+        '💾 Saved listing: listing_id=%s, created=%s, is_complex=%s, images=%s',
+        listing.listing_id,
+        created,
+        listing.is_complex,
+        len(images),
+    )
     return listing, images
 
 
@@ -575,22 +629,37 @@ def _fetch_recheck(req: Request, data: dict) -> dict | None:
     total = data.get('total')
     tag = f'[recheck {idx}/{total}]' if idx and total else '[recheck]'
     started = time_mod.monotonic()
-    logger.info('%s fetching %s', tag, data['listing_id'])
+    logger.info('🔁 %s fetching %s', tag, data['listing_id'])
     try:
         resp = req.get(data['url'], timeout=60)
     except Exception as exc:
-        logger.warning('%s fetch failed %s: %s', tag, data['url'], exc)
+        logger.warning('⚠️ %s fetch failed %s: %s', tag, data['url'], exc)
         return None
 
+    status = resp.status_code
     text = resp.text
-    if REMOVED_MARKER_RE.search(text):
-        logger.info('%s %s no longer available — marking removed', tag, data['listing_id'])
+    if status in GONE_STATUSES or REMOVED_MARKER_RE.search(text):
+        logger.info(
+            '🔁 %s %s no longer available — marking removed: status=%s',
+            tag,
+            data['listing_id'],
+            status,
+        )
         return {'listing_id': data['listing_id'], 'url': data['url'], 'removed': True}
+    if status >= HTTP_ERROR_MIN:
+        logger.warning(
+            '⚠️ %s HTTP error, listing left untouched: listing_id=%s, status=%s, url=%s',
+            tag,
+            data['listing_id'],
+            status,
+            data['url'],
+        )
+        return None
 
     result = _parse_detail_html(text, data)
     elapsed = time_mod.monotonic() - started
     logger.info(
-        '%s parsed %s in %.1fs — %s | %s | %s imgs',
+        '🔁 %s parsed %s in %.1fs — %s | %s | %s imgs',
         tag,
         data['listing_id'],
         elapsed,
@@ -675,34 +744,41 @@ def _mark_removed(listing: Listing, now) -> None:
             group.refresh_removed_at()
 
 
-def _apply_recheck_result(d: dict) -> int:
-    """Persist a single recheck outcome. Returns number of images saved.
+def _apply_recheck_result(d: dict, replace_images: bool = True) -> tuple[str, int]:
+    """Persist a single recheck outcome; return ``(outcome, images_saved)``.
 
-    Only overwrites listing fields/images when the parse clearly indicates the
-    listing is still available (title or price text or headline AND ≥1 image).
-    Otherwise marks the listing removed without touching existing data.
+    ``outcome`` is ``'removed'``, ``'refreshed'``, ``'restored'`` (was removed, live
+    again) or ``'unknown'`` (no such listing in the DB). Only overwrites listing
+    fields/images when the parse clearly indicates the listing is still available
+    (title or price text or headline AND ≥1 image). Otherwise marks the listing removed
+    without touching existing data. With ``replace_images=False`` a live listing's photos
+    are topped up incrementally (only unseen URLs are downloaded) instead of re-fetching
+    the whole set.
     """
     listing = Listing.objects.filter(listing_id=d['listing_id']).first()
     if listing is None:
-        return 0
+        logger.warning('⚠️ Recheck result for unknown listing: listing_id=%s', d['listing_id'])
+        return 'unknown', 0
 
     now = timezone.now()
     if d.get('removed'):
         _mark_removed(listing, now)
-        return 0
+        logger.info('🔁 Recheck marked listing removed: listing_id=%s', listing.listing_id)
+        return 'removed', 0
 
     images = d.pop('images', [])
     has_text = bool(d.get('title') or d.get('price_text') or d.get('headline'))
     if not has_text or not images:
+        _mark_removed(listing, now)
         logger.warning(
-            'recheck %s parse missing key fields (text=%s images=%s) — marking removed',
-            d['listing_id'],
+            '⚠️ Recheck parse missing key fields, marked removed: listing_id=%s, text=%s, images=%s',
+            listing.listing_id,
             has_text,
             len(images),
         )
-        _mark_removed(listing, now)
-        return 0
+        return 'removed', 0
 
+    was_removed = listing.removed_at is not None
     update = {k: v for k, v in d.items() if k not in ('index', 'total') and v is not None}
     update['removed_at'] = None
     update['rechecked_at'] = now
@@ -710,68 +786,130 @@ def _apply_recheck_result(d: dict) -> int:
         for k, v in update.items():
             setattr(listing, k, v)
         listing.save()
-    saved = _replace_listing_images(listing, images)
+    if replace_images:
+        saved = _replace_listing_images(listing, images)
+    else:
+        saved = _download_listing_images(listing, images)
     if listing.group_id:
         group = ListingGroup.objects.filter(pk=listing.group_id).first()
         if group:
             group.refresh_removed_at()
-    return saved
-
-
-def recheck_oldest(fraction: float = RECHECK_FRACTION) -> dict:
-    """Re-fetch the oldest-checked active listings to detect removals and refresh data.
-
-    Picks ``ceil(active_total * fraction)`` listings ordered by ``rechecked_at`` ASC
-    (nulls first) then ``first_seen_at`` ASC.
-    """
-    qs = Listing.objects.filter(removed_at__isnull=True)
-    total_active = qs.count()
-    if total_active == 0:
-        return {'rechecked': 0, 'removed': 0, 'images': 0}
-
-    n = math.ceil(total_active * fraction)
-    rows = list(
-        qs.order_by(F('rechecked_at').asc(nulls_first=True), 'first_seen_at').values(
-            'listing_id', 'url'
-        )[:n]
+    outcome = 'restored' if was_removed else 'refreshed'
+    logger.info(
+        '🔁 Recheck %s listing: listing_id=%s, images_saved=%s, replace_images=%s',
+        outcome,
+        listing.listing_id,
+        saved,
+        replace_images,
     )
+    return outcome, saved
+
+
+def _recheck_rows(rows: list[dict], reason: str, replace_images: bool = True) -> dict:
+    """Re-fetch the given listings (``listing_id`` + ``url``) concurrently and apply each result."""
+    stats = {'rechecked': 0, 'removed': 0, 'restored': 0, 'failed': 0, 'images': 0}
     if not rows:
-        return {'rechecked': 0, 'removed': 0, 'images': 0}
+        logger.info('🔁 Nothing to recheck: reason=%s', reason)
+        return stats
 
-    logger.info('rechecking %s/%s active listings', len(rows), total_active)
-    jobs = [{**r, 'index': i + 1, 'total': len(rows)} for i, r in enumerate(rows)]
-
-    rechecked = 0
-    removed = 0
-    image_count = 0
+    total = len(rows)
+    logger.info('🔁 Rechecking listings: reason=%s, count=%s', reason, total)
+    jobs = [{**r, 'index': i + 1, 'total': total} for i, r in enumerate(rows)]
+    done = 0
     with ThreadPoolExecutor(max_workers=DETAIL_CONCURRENCY) as pool:
         futures = [pool.submit(_fetch_recheck, j) for j in jobs]
         for fut in as_completed(futures):
+            done += 1
             d = fut.result()
-            if not d:
-                continue
-            saved = _apply_recheck_result(d)
-            image_count += saved
-            rechecked += 1
-            if d.get('removed'):
-                removed += 1
+            if d:
+                outcome, saved = _apply_recheck_result(d, replace_images=replace_images)
+                stats['rechecked'] += 1
+                stats['images'] += saved
+                if outcome in ('removed', 'restored'):
+                    stats[outcome] += 1
+            else:
+                stats['failed'] += 1
+            if done % RECHECK_PROGRESS_EVERY == 0:
+                logger.info('🔁 Recheck progress: reason=%s, done=%s/%s', reason, done, total)
 
-    logger.info(
-        'recheck done — rechecked=%s removed=%s images=%s',
-        rechecked,
-        removed,
-        image_count,
+    logger.info('🔁 Recheck done: reason=%s, total=%s, %s', reason, total, stats)
+    return stats
+
+
+def recheck_oldest(fraction: float = RECHECK_FRACTION) -> dict:
+    """Re-fetch the least recently checked active listings to refresh their data.
+
+    Picks ``ceil(active_total * fraction)`` listings ordered by when they were last
+    looked at (``rechecked_at``, else ``first_seen_at``), so the whole set rotates.
+    Ordering never-rechecked listings first instead starves the rotation: new listings
+    arrive faster than the 1% budget, so an already-rechecked listing never comes up again.
+    """
+    qs = Listing.objects.filter(removed_at__isnull=True)
+    total_active = qs.count()
+    n = math.ceil(total_active * fraction)
+    rows = list(
+        qs.order_by(Coalesce('rechecked_at', 'first_seen_at'), 'first_seen_at').values(
+            'listing_id', 'url'
+        )[:n]
     )
-    return {'rechecked': rechecked, 'removed': removed, 'images': image_count}
+    logger.info('🔁 Selected oldest-checked: selected=%s, active=%s', len(rows), total_active)
+    stats = _recheck_rows(rows, reason='rotation')
+    logger.info('🔁 Rotation recheck completed: active=%s, %s', total_active, stats)
+    return stats
+
+
+def reconcile_with_live(live_ids: set[str]) -> dict:
+    """Recheck listings whose stored status disagrees with a complete list-page walk.
+
+    ``live_ids`` must be every listing currently on the site's list pages (all sources,
+    all pages). Active listings missing from it are re-fetched to confirm the removal on
+    their detail page; removed listings present in it are re-fetched so they get restored.
+    """
+    gone = [
+        r
+        for r in Listing.objects.filter(removed_at__isnull=True).values('listing_id', 'url')
+        if r['listing_id'] not in live_ids
+    ]
+    back = [
+        r
+        for r in Listing.objects.filter(removed_at__isnull=False).values('listing_id', 'url')
+        if r['listing_id'] in live_ids
+    ]
+    logger.info(
+        '🔁 Reconciling with list pages: live=%s, active_not_listed=%s, removed_but_listed=%s',
+        len(live_ids),
+        len(gone),
+        len(back),
+    )
+    # Incremental photos: a few live listings sit outside the searched suburbs and come up
+    # here on every run, so a full re-download each time would be pure churn.
+    stats = _recheck_rows(gone + back, reason='reconcile', replace_images=False)
+    logger.info('🔁 Reconcile completed: live=%s, %s', len(live_ids), stats)
+    return stats
 
 
 def scrape(start_url: str | None = None, max_pages: int | None = None, full: bool = False) -> dict:
-    """Scrape new listings and their images; return a summary dict."""
+    """Scrape new listings (every card when ``full``) and their images; return a summary.
+
+    The summary's ``live_ids``/``complete`` describe the list-page walk, for
+    :func:`reconcile_with_live`.
+    """
     start_url = start_url or PP_SVILLE
 
-    cards = collect_new_listing_cards(start_url, max_pages=max_pages, full=full)
+    all_cards, complete = walk_list_pages(start_url, max_pages=max_pages)
+    live_ids = {c['listing_id'] for c in all_cards}
+    if full:
+        cards = all_cards
+    else:
+        existing = set(Listing.objects.values_list('listing_id', flat=True))
+        cards = [c for c in all_cards if c['listing_id'] not in existing]
     total = len(cards)
-    logger.info('found %s listing cards to process', total)
+    logger.info(
+        '📄 Found listing cards to process: to_fetch=%s, live=%s, full=%s',
+        total,
+        len(live_ids),
+        full,
+    )
 
     new_count = 0
     image_count = 0
@@ -796,4 +934,18 @@ def scrape(start_url: str | None = None, max_pages: int | None = None, full: boo
                     image_count,
                 )
 
-    return {'new_listings': new_count, 'images': image_count}
+    logger.info(
+        '📄 Scrape completed: start_url=%s, saved=%s/%s, images=%s, live=%s, complete=%s',
+        start_url,
+        new_count,
+        total,
+        image_count,
+        len(live_ids),
+        complete,
+    )
+    return {
+        'new_listings': new_count,
+        'images': image_count,
+        'live_ids': live_ids,
+        'complete': complete,
+    }

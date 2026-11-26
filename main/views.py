@@ -30,9 +30,11 @@ SORT_OPTIONS = {
 # Complex facet value meaning "no complex name entered yet" (stored as '').
 COMPLEX_NOT_SET = '__none__'
 
-# Conditions shared by the Levies/Liked radio filters and their counts.
-LEVIES_YES_Q = Q(levies__isnull=False, levies__gt=0)
-LEVIES_NO_Q = Q(levies__isnull=True) | Q(levies=0)
+# Conditions shared by the In-a-complex/Liked radio filters and their counts.
+# is_complex is kept identical across a group, so the shown primary's own value
+# stands for the whole group.
+COMPLEX_YES_Q = Q(is_complex=True)
+COMPLEX_NO_Q = Q(is_complex=False)
 LIKED_YES_Q = Q(group__isnull=True, is_liked=True) | Q(group__is_liked=True)
 LIKED_NO_Q = Q(group__isnull=True, is_liked=False) | Q(group__is_liked=False)
 
@@ -190,7 +192,7 @@ class ListingFilters:
     baths: list[float] = field(default_factory=list)
     garages: list[float] = field(default_factory=list)
     complexes: list[str] = field(default_factory=list)
-    has_levies: str = ''
+    is_complex: str = ''
     is_liked: str = ''
     price_min: float | None = None
     price_max: float | None = None
@@ -208,7 +210,7 @@ class ListingFilters:
             baths=_parse_floats(params.getlist('baths')),
             garages=_parse_floats(params.getlist('garages')),
             complexes=[c for c in params.getlist('complex') if c],
-            has_levies=params.get('has_levies', ''),
+            is_complex=params.get('is_complex', ''),
             is_liked=params.get('is_liked', ''),
             price_min=_parse_float(params.get('price_min')),
             price_max=_parse_float(params.get('price_max')),
@@ -229,7 +231,7 @@ class ListingFilters:
     def active_count(self):
         """Number of applied filters, shown in the sidebar's "Clear (n)" link."""
         multi = self.types + self.beds + self.baths + self.garages + self.complexes
-        single = (self.q, self.has_levies, self.is_liked)
+        single = (self.q, self.is_complex, self.is_liked)
         return (
             len(multi)
             + sum(1 for v in single if v)
@@ -277,7 +279,7 @@ def _filter_conditions(filters):
     """Map each filter's skip key to the Q it applies (None when inactive)."""
     conds = {
         'q': _search_q(filters.q),
-        'has_levies': {'yes': LEVIES_YES_Q, 'no': LEVIES_NO_Q}.get(filters.has_levies),
+        'is_complex': {'yes': COMPLEX_YES_Q, 'no': COMPLEX_NO_Q}.get(filters.is_complex),
         'complex': _complex_q(filters.complexes),
         'is_liked': {'yes': LIKED_YES_Q, 'no': LIKED_NO_Q}.get(filters.is_liked),
         'price': _range_q('price', filters.price_min, filters.price_max),
@@ -391,7 +393,7 @@ def _percentile_facet(params, filters, list_url, spec, data):
 
 
 def _build_facets(base, filters):
-    """Checkbox facet rows and the Levies/Liked radio counts, keyed for the template.
+    """Checkbox facet rows and the In-a-complex/Liked radio counts, keyed for the template.
 
     Each facet is counted over the set filtered by everything except itself.
     """
@@ -412,18 +414,18 @@ def _build_facets(base, filters):
             items.append((value, value, row['n'], value in selected))
         facets[ctx_key] = items
 
-    # "Not set" leads the list so "With levies + Not set" is an easy to-do view.
+    # "Not set" leads the list so "In a complex: Yes + Not set" is an easy to-do view.
     not_set = _apply_filters(base, filters, skip='complex').filter(complex_name='').count()
     if not_set:
         facets['complex_facet'].insert(
             0, (COMPLEX_NOT_SET, '— Not set', not_set, COMPLEX_NOT_SET in filters.complexes)
         )
 
-    levies_qs = _apply_filters(base, filters, skip='has_levies')
-    facets['levies_counts'] = {
-        'any': levies_qs.count(),
-        'yes': levies_qs.filter(LEVIES_YES_Q).count(),
-        'no': levies_qs.filter(LEVIES_NO_Q).count(),
+    complex_qs = _apply_filters(base, filters, skip='is_complex')
+    facets['complex_counts'] = {
+        'any': complex_qs.count(),
+        'yes': complex_qs.filter(COMPLEX_YES_Q).count(),
+        'no': complex_qs.filter(COMPLEX_NO_Q).count(),
     }
     liked_qs = _apply_filters(base, filters, skip='is_liked')
     facets['liked_counts'] = {
@@ -433,7 +435,9 @@ def _build_facets(base, filters):
     }
     option_counts = ', '.join(f'{key}={len(facets[key])}' for key, *_ in CHECKBOX_FACETS)
     logger.info(
-        f'🏠 Built list facets: {option_counts}, levies_any={facets["levies_counts"]["any"]}'
+        f'🏠 Built list facets: {option_counts}, '
+        f'complex_yes={facets["complex_counts"]["yes"]}, '
+        f'complex_no={facets["complex_counts"]["no"]}'
     )
     return facets
 
@@ -543,9 +547,14 @@ def listing_list(request):
         listings.sort(key=PYTHON_SORT_KEYS[filters.sort])
 
     # Removed listings go into their own section after every active one (POA
-    # included), keeping the chosen sort order within each section.
+    # included). Active ones keep the chosen sort; removed ones are always most
+    # recently removed first (the stable sort keeps the chosen order on ties).
     active_listings = [li for li in listings if not li.display_removed_at]
-    removed_listings = [li for li in listings if li.display_removed_at]
+    removed_listings = sorted(
+        (li for li in listings if li.display_removed_at),
+        key=lambda li: li.display_removed_at,
+        reverse=True,
+    )
 
     # Snapped values, so the hidden inputs resubmit the bounds that are actually
     # highlighted rather than the stale ones from the URL.
@@ -564,7 +573,7 @@ def listing_list(request):
         'filters': {
             'q': filters.q,
             **snapped_bounds,
-            'has_levies': filters.has_levies,
+            'is_complex': filters.is_complex,
             'is_liked': filters.is_liked,
             'sort': filters.sort,
         },
@@ -627,7 +636,7 @@ def listing_detail(request, listing_id):
     logger.info(
         f'🏠 Rendered listing detail: listing_id={listing.listing_id}, '
         f'group_id={listing.group_id}, siblings={len(group_siblings)}, '
-        f'complex_name={listing.complex_name!r}, '
+        f'is_complex={listing.is_complex}, complex_name={listing.complex_name!r}, '
         f'complex_options={len(complex_names)}'
     )
     return render(
@@ -724,6 +733,7 @@ def mark_similar(request):
         group.save(update_fields=['notes', 'is_liked', 'primary'])
 
         merged_complex = _sync_group_complex_name(group)
+        merged_is_complex = _sync_group_is_complex(group)
         group.refresh_removed_at()
 
     next_url = request.POST.get('next') or ''
@@ -733,7 +743,8 @@ def mark_similar(request):
         next_url = f'{next_url}#listing-{group.primary.listing_id}'
     logger.info(
         f'🔗 Marked listings similar: group_id={group.pk}, listings={len(listings)}, '
-        f'absorbed_groups={len(absorbed)}, complex_name={merged_complex!r}'
+        f'absorbed_groups={len(absorbed)}, complex_name={merged_complex!r}, '
+        f'is_complex={merged_is_complex}'
     )
     return HttpResponseRedirect(next_url)
 
@@ -766,6 +777,22 @@ def _sync_group_complex_name(group):
         f'complex_name={merged!r}, listings_updated={updated}'
     )
     return merged
+
+
+def _sync_group_is_complex(group):
+    """Mark every group member as a complex if any of them is; return the result.
+
+    Duplicates are the same property, so one member toggled (or scraped with
+    levies) is enough. Changes nothing when no member is a complex.
+    """
+    if not group.listings.filter(is_complex=True).exists():
+        logger.info(f'🔗 No complex flag to sync in group: group_id={group.pk}')
+        return False
+    updated = group.listings.filter(is_complex=False).update(is_complex=True)
+    logger.info(
+        f'🔗 Synced is_complex across group: group_id={group.pk}, listings_updated={updated}'
+    )
+    return True
 
 
 @require_POST
@@ -812,13 +839,24 @@ def set_property_type(request, listing_id):
 
 
 @require_POST
-def set_levy_placeholder(request, listing_id):
-    """Set levies to 1 so the listing no longer filters under 'no levies'."""
+def set_is_complex(request, listing_id):
+    """Save the "in a complex" toggle on this listing and every linked duplicate.
+
+    Like the complex name, the whole group shares one value and each listing
+    keeps it after a later unlink. Turning it off keeps the complex name.
+    """
     listing = get_object_or_404(Listing, listing_id=listing_id)
-    if not listing.levies:
-        listing.levies = 1
-        listing.save(update_fields=['levies'])
-    return redirect('main:listing_detail', listing_id=listing_id)
+    is_complex = request.POST.get('is_complex') in ('1', 'true', 'on', 'yes')
+    if listing.group_id:
+        targets = Listing.objects.filter(group_id=listing.group_id)
+    else:
+        targets = Listing.objects.filter(pk=listing.pk)
+    updated = targets.exclude(is_complex=is_complex).update(is_complex=is_complex)
+    logger.info(
+        f'🏢 Saved is_complex: listing_id={listing_id}, group_id={listing.group_id}, '
+        f'is_complex={is_complex}, listings_updated={updated}'
+    )
+    return JsonResponse({'saved': True, 'is_complex': is_complex})
 
 
 @require_POST
